@@ -312,13 +312,6 @@ func (m detailModel) currentCell() string {
 	return m.rows[m.row].value
 }
 
-func (m detailModel) currentCellSafe() string {
-	if len(m.rows) == 0 || m.onButton() {
-		return ""
-	}
-	return m.currentCell()
-}
-
 func (m *detailModel) setCell(s string) {
 	if m.col == 0 {
 		m.rows[m.row].name = s
@@ -437,10 +430,7 @@ func (m detailModel) View() string {
 	var b strings.Builder
 
 	b.WriteString(titleStyle.Render("  kli — command history") + "\n")
-	maxW := m.width - 2
-	if maxW < 10 {
-		maxW = 10
-	}
+	maxW := m.width - 4
 	for _, l := range wrapText(m.liveCommand(), maxW) {
 		b.WriteString(headerStyle.Render("  "+l) + "\n")
 	}

@@ -47,10 +47,7 @@ func NewAppOnDetail(inv domain.Invocation, invocations []domain.Invocation, hist
 func (a *App) Init() tea.Cmd {
 	a.history = newHistoryModel(a.invocations, a.width, a.height)
 	if a.startOnDetail != nil {
-		dm := newDetailModel(*a.startOnDetail, a.width)
-		dm, cmd := dm.startEditing(dm.currentCellSafe())
-		a.detail = dm
-		return cmd
+		a.detail = newDetailModel(*a.startOnDetail, a.width)
 	}
 	return nil
 }
