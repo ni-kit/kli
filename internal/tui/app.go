@@ -1,0 +1,171 @@
+package tui
+
+import (
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/ni-kit/kli/internal/domain"
+	"github.com/ni-kit/kli/internal/service"
+)
+
+type screen int
+
+const (
+	screenHistory screen = iota
+	screenDetail
+)
+
+type App struct {
+	screen        screen
+	invocations   []domain.Invocation
+	historySvc    service.HistoryService
+	history       historyModel
+	detail        detailModel
+	width         int
+	height        int
+	histExecArgv  []string
+	startOnDetail *domain.Invocation // non-nil → open detail screen immediately
+}
+
+func NewApp(invocations []domain.Invocation, historySvc service.HistoryService) *App {
+	return &App{
+		screen:      screenHistory,
+		invocations: invocations,
+		historySvc:  historySvc,
+	}
+}
+
+func NewAppOnDetail(inv domain.Invocation, invocations []domain.Invocation, historySvc service.HistoryService) *App {
+	return &App{
+		screen:        screenDetail,
+		invocations:   invocations,
+		historySvc:    historySvc,
+		startOnDetail: &inv,
+	}
+}
+
+func (a *App) Init() tea.Cmd {
+	a.history = newHistoryModel(a.invocations, a.width, a.height)
+	if a.startOnDetail != nil {
+		dm := newDetailModel(*a.startOnDetail, a.width)
+		dm, cmd := dm.startEditing(dm.currentCellSafe())
+		a.detail = dm
+		return cmd
+	}
+	return nil
+}
+
+func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		a.width = msg.Width
+		a.height = msg.Height
+		a.history.setSize(msg.Width, msg.Height)
+		return a, nil
+
+	case setTagsInvMsg:
+		if err := a.historySvc.SetTags(msg.id, msg.tags); err == nil {
+			if invs, err := a.historySvc.All(); err == nil {
+				a.invocations = invs
+				a.history.reloadInvocations(invs)
+			}
+		}
+		return a, nil
+
+	case tea.KeyPressMsg:
+		switch a.screen {
+		case screenHistory:
+			if a.history.mode != histModeNormal {
+				var cmd tea.Cmd
+				a.history, cmd = a.history.Update(msg)
+				return a, cmd
+			}
+			switch {
+			case key.Matches(msg, appKeys.Quit):
+				return a, tea.Quit
+			case key.Matches(msg, appKeys.Enter):
+				inv := a.history.selectedInvocation()
+				if inv != nil {
+					a.detail = newDetailModel(*inv, a.width)
+					a.screen = screenDetail
+				}
+				return a, nil
+			case msg.String() == "x":
+				inv := a.history.selectedInvocation()
+				if inv != nil {
+					argv := make([]string, 0, 1+len(inv.Args))
+					argv = append(argv, inv.Command)
+					for _, arg := range inv.Args {
+						argv = append(argv, arg.Display())
+					}
+					a.histExecArgv = argv
+					return a, tea.Quit
+				}
+				return a, nil
+			default:
+				var cmd tea.Cmd
+				a.history, cmd = a.history.Update(msg)
+				return a, cmd
+			}
+
+		case screenDetail:
+			if a.detail.IsEditing() {
+				if msg.String() == "ctrl+c" {
+					return a, tea.Quit
+				}
+				var cmd tea.Cmd
+				a.detail, cmd = a.detail.Update(msg)
+				return a, cmd
+			}
+			switch {
+			case key.Matches(msg, appKeys.Back):
+				a.screen = screenHistory
+				return a, nil
+			case key.Matches(msg, appKeys.Quit):
+				return a, tea.Quit
+			default:
+				var cmd tea.Cmd
+				a.detail, cmd = a.detail.Update(msg)
+				return a, cmd
+			}
+		}
+
+	default:
+		if a.screen == screenDetail && a.detail.IsEditing() {
+			var cmd tea.Cmd
+			a.detail, cmd = a.detail.Update(msg)
+			return a, cmd
+		}
+	}
+
+	if a.screen == screenHistory {
+		var cmd tea.Cmd
+		a.history, cmd = a.history.Update(msg)
+		return a, cmd
+	}
+	return a, nil
+}
+
+func (a *App) View() tea.View {
+	var content string
+	switch a.screen {
+	case screenDetail:
+		content = a.detail.View()
+	default:
+		content = a.history.View()
+	}
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
+}
+
+func (a *App) ExecRequested() bool {
+	return len(a.histExecArgv) > 0 || (a.screen == screenDetail && a.detail.ExecRequested())
+}
+
+func (a *App) ExecArgv() []string {
+	if len(a.histExecArgv) > 0 {
+		return a.histExecArgv
+	}
+	return a.detail.ExecArgv()
+}

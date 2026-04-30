@@ -1,0 +1,558 @@
+package tui
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
+
+	"github.com/ni-kit/kli/internal/domain"
+)
+
+const (
+	colNameW  = 22
+	colValueW = 36
+)
+
+var (
+	headerStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	sectionStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
+	locationStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("108"))
+	hintStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+	cellSelected   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("33"))
+	cellName       = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	cellValue      = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	cellDisabled   = lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Strikethrough(true)
+	disabledMark   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	cellEnvHint    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	cellHeader     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
+	rowActiveStyle = lipgloss.NewStyle().Background(lipgloss.Color("237"))
+
+	runBtnNormal  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	runBtnFocused = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("34")).Padding(0, 2)
+)
+
+const numCols = 2
+
+type detailMode int
+
+const (
+	modeNormal detailMode = iota
+	modeEditing
+)
+
+type detailKeyMap struct {
+	Up          key.Binding
+	Down        key.Binding
+	Left        key.Binding
+	Right       key.Binding
+	Enter       key.Binding
+	Insert      key.Binding
+	C           key.Binding // arms ci (change-in-cell)
+	D           key.Binding // arms dd (delete row)
+	Paste       key.Binding
+	Yank        key.Binding
+	YankCmd     key.Binding
+	AddRow      key.Binding
+	X           key.Binding
+	Undo        key.Binding
+	ToggleRow   key.Binding
+	ToggleValue key.Binding
+}
+
+var detailKeys = detailKeyMap{
+	Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Left:        key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←/h", "left")),
+	Right:       key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→/l", "right")),
+	Enter:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "edit/run")),
+	Insert:      key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "edit cell")),
+	C:           key.NewBinding(key.WithKeys("c"), key.WithHelp("ci", "change cell")),
+	D:           key.NewBinding(key.WithKeys("d"), key.WithHelp("dd", "delete row")),
+	Paste:       key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "paste")),
+	Yank:        key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy cell")),
+	YankCmd:     key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy command")),
+	AddRow:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add flag/value below")),
+	X:           key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "exec")),
+	Undo:        key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "undo")),
+	ToggleRow:   key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle row")),
+	ToggleValue: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "secret value")),
+}
+
+type displayRow struct {
+	name     string
+	value    string
+	disabled bool // excluded from exec and copy
+	secret   bool // value passed to exec but shown as •••• in copy
+}
+
+func buildRows(args []domain.Arg) []displayRow {
+	rows := make([]displayRow, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch a.Kind {
+		case domain.ArgShortFlag, domain.ArgLongFlag:
+			name := flagLabel(a)
+			value := ""
+			if i+1 < len(args) && args[i+1].Kind == domain.ArgFlagValue {
+				i++
+				value = args[i].Value
+			}
+			rows = append(rows, displayRow{name: name, value: value})
+		case domain.ArgPositional:
+			rows = append(rows, displayRow{name: "", value: a.Value})
+		case domain.ArgFlagValue:
+			rows = append(rows, displayRow{name: "", value: a.Value})
+		}
+	}
+	return rows
+}
+
+func flagLabel(a domain.Arg) string {
+	switch a.Kind {
+	case domain.ArgShortFlag:
+		return "-" + a.Name
+	case domain.ArgLongFlag:
+		return "--" + a.Name
+	}
+	return ""
+}
+
+type undoEntry struct {
+	row, col int
+	value    string
+	rows     []displayRow // non-nil → row add/delete undo; nil → cell edit undo
+	rowPos   int
+}
+
+type copiedMsg struct{}
+
+type detailModel struct {
+	inv           domain.Invocation
+	width         int
+	rows          []displayRow
+	row           int // 0..len(rows)-1 = arg rows; len(rows) = Run button
+	col           int
+	mode          detailMode
+	cArmed        bool
+	dArmed        bool
+	input         textinput.Model
+	execRequested bool
+	undo          *undoEntry
+	copied        bool // flash "copied!" feedback
+}
+
+func (m detailModel) ExecRequested() bool { return m.execRequested }
+func (m detailModel) ExecArgv() []string  { return m.liveArgv() }
+func (m detailModel) onButton() bool      { return m.row == len(m.rows) }
+
+func newDetailModel(inv domain.Invocation, width int) detailModel {
+	ti := textinput.New()
+	ti.CharLimit = 256
+	return detailModel{
+		inv:   inv,
+		width: width,
+		rows:  buildRows(inv.Args),
+		input: ti,
+	}
+}
+
+func (m detailModel) IsEditing() bool { return m.mode == modeEditing }
+
+func (m detailModel) Update(msg tea.Msg) (detailModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		if m.mode == modeEditing {
+			return m.updateEditing(msg)
+		}
+		return m.updateNormal(msg)
+	case copiedMsg:
+		m.copied = false
+		return m, nil
+	default:
+		if m.mode == modeEditing {
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			return m, cmd
+		}
+	}
+	return m, nil
+}
+
+func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
+	if m.cArmed {
+		m.cArmed = false
+		if msg.String() == "i" && !m.onButton() {
+			m.setCell("")
+			return m.startEditing("")
+		}
+	}
+	if m.dArmed {
+		m.dArmed = false
+		if key.Matches(msg, detailKeys.D) && !m.onButton() && len(m.rows) > 0 {
+			snapshot := make([]displayRow, len(m.rows))
+			copy(snapshot, m.rows)
+			m.undo = &undoEntry{rows: snapshot, rowPos: m.row}
+			m.rows = append(m.rows[:m.row:m.row], m.rows[m.row+1:]...)
+			if m.row >= len(m.rows) && m.row > 0 {
+				m.row--
+			}
+			return m, nil
+		}
+	}
+
+	switch {
+	case key.Matches(msg, detailKeys.Up):
+		if m.row > 0 {
+			m.row--
+		}
+	case key.Matches(msg, detailKeys.Down):
+		if m.row < len(m.rows) {
+			m.row++
+		}
+	case key.Matches(msg, detailKeys.Left):
+		if !m.onButton() && m.col > 0 {
+			m.col--
+		}
+	case key.Matches(msg, detailKeys.Right):
+		if !m.onButton() && m.col < numCols-1 {
+			m.col++
+		}
+	case key.Matches(msg, detailKeys.Enter):
+		if m.onButton() {
+			m.execRequested = true
+			return m, tea.Quit
+		}
+		return m.startEditing(m.currentCell())
+	case key.Matches(msg, detailKeys.Insert):
+		if !m.onButton() {
+			return m.startEditing(m.currentCell())
+		}
+	case key.Matches(msg, detailKeys.X):
+		m.execRequested = true
+		return m, tea.Quit
+	case key.Matches(msg, detailKeys.C):
+		if !m.onButton() {
+			m.cArmed = true
+		}
+	case key.Matches(msg, detailKeys.ToggleRow):
+		if !m.onButton() {
+			m.rows[m.row].disabled = !m.rows[m.row].disabled
+		}
+	case key.Matches(msg, detailKeys.ToggleValue):
+		if !m.onButton() {
+			m.rows[m.row].secret = !m.rows[m.row].secret
+		}
+	case key.Matches(msg, detailKeys.Yank):
+		if !m.onButton() {
+			clipboard.WriteAll(m.currentCell()) //nolint:errcheck
+			m.copied = true
+			return m, clearCopiedAfter()
+		}
+	case key.Matches(msg, detailKeys.YankCmd):
+		clipboard.WriteAll(m.copyCommand()) //nolint:errcheck
+		m.copied = true
+		return m, clearCopiedAfter()
+	case key.Matches(msg, detailKeys.Paste):
+		if !m.onButton() {
+			text, err := clipboard.ReadAll()
+			if err == nil {
+				m.setCell(text)
+			}
+		}
+	case key.Matches(msg, detailKeys.D):
+		if !m.onButton() {
+			m.dArmed = true
+		}
+	case key.Matches(msg, detailKeys.AddRow):
+		if !m.onButton() {
+			snapshot := make([]displayRow, len(m.rows))
+			copy(snapshot, m.rows)
+			insertAt := m.row + 1
+			m.undo = &undoEntry{rows: snapshot, rowPos: m.row}
+			newRows := make([]displayRow, len(m.rows)+1)
+			copy(newRows, m.rows[:insertAt])
+			newRows[insertAt] = displayRow{}
+			copy(newRows[insertAt+1:], m.rows[insertAt:])
+			m.rows = newRows
+			m.row = insertAt
+			m.col = 0
+			return m.startEditing("")
+		}
+	case key.Matches(msg, detailKeys.Undo):
+		if m.undo != nil {
+			if m.undo.rows != nil {
+				m.rows = m.undo.rows
+				m.row = m.undo.rowPos
+			} else {
+				if m.undo.col == 0 {
+					m.rows[m.undo.row].name = m.undo.value
+				} else {
+					m.rows[m.undo.row].value = m.undo.value
+				}
+				m.row, m.col = m.undo.row, m.undo.col
+			}
+			m.undo = nil
+		}
+	}
+	return m, nil
+}
+
+func (m detailModel) currentCell() string {
+	if m.col == 0 {
+		return m.rows[m.row].name
+	}
+	return m.rows[m.row].value
+}
+
+func (m detailModel) currentCellSafe() string {
+	if len(m.rows) == 0 || m.onButton() {
+		return ""
+	}
+	return m.currentCell()
+}
+
+func (m *detailModel) setCell(s string) {
+	if m.col == 0 {
+		m.rows[m.row].name = s
+	} else {
+		m.rows[m.row].value = s
+	}
+}
+
+func (m detailModel) startEditing(initial string) (detailModel, tea.Cmd) {
+	m.mode = modeEditing
+	m.input.SetValue(initial)
+	cmd := m.input.Focus()
+	return m, cmd
+}
+
+func (m detailModel) updateEditing(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.undo = &undoEntry{row: m.row, col: m.col, value: m.currentCell()}
+		m.setCell(m.input.Value())
+		m.input.Blur()
+		m.mode = modeNormal
+		return m, nil
+	case "esc":
+		m.input.Blur()
+		m.mode = modeNormal
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
+func isBareSingleShortFlag(dr displayRow) bool {
+	return len(dr.name) == 2 && dr.name[0] == '-' && dr.value == ""
+}
+
+func mergedTokens(rows []displayRow, secretsVisible bool) []string {
+	var tokens []string
+	i := 0
+	for i < len(rows) {
+		dr := rows[i]
+		if dr.disabled {
+			i++
+			continue
+		}
+		if isBareSingleShortFlag(dr) {
+			cluster := string(dr.name[1]) // single letter
+			j := i + 1
+			for j < len(rows) && !rows[j].disabled && isBareSingleShortFlag(rows[j]) {
+				cluster += string(rows[j].name[1])
+				j++
+			}
+			if len(cluster) > 1 {
+				tokens = append(tokens, "-"+cluster)
+				i = j
+				continue
+			}
+		}
+		val := dr.value
+		if !secretsVisible && dr.secret && val != "" {
+			val = "••••"
+		}
+		if dr.name == "" {
+			if val != "" {
+				tokens = append(tokens, val)
+			}
+		} else {
+			tokens = append(tokens, dr.name)
+			if val != "" {
+				tokens = append(tokens, val)
+			}
+		}
+		i++
+	}
+	return tokens
+}
+
+func (m detailModel) liveArgv() []string {
+	tokens := mergedTokens(m.rows, true)
+	for i, t := range tokens {
+		tokens[i] = os.ExpandEnv(t)
+	}
+	return append([]string{m.inv.Command}, tokens...)
+}
+
+func (m detailModel) copyCommand() string {
+	return strings.Join(append([]string{m.inv.Command}, mergedTokens(m.rows, false)...), " ")
+}
+
+func (m detailModel) liveCommand() string {
+	rows := make([]displayRow, len(m.rows))
+	copy(rows, m.rows)
+	if m.mode == modeEditing && !m.onButton() {
+		if m.col == 0 {
+			rows[m.row].name = m.input.Value()
+		} else {
+			rows[m.row].value = m.input.Value()
+		}
+	}
+	return strings.Join(append([]string{m.inv.Command}, mergedTokens(rows, true)...), " ")
+}
+
+func envHint(value string) string {
+	if !strings.Contains(value, "$") {
+		return ""
+	}
+	expanded := os.ExpandEnv(value)
+	if expanded == value {
+		return ""
+	}
+	return "→ " + expanded
+}
+
+func (m detailModel) View() string {
+	var b strings.Builder
+
+	b.WriteString(titleStyle.Render("  kli — command history") + "\n")
+	maxW := m.width - 2
+	if maxW < 10 {
+		maxW = 10
+	}
+	for _, l := range wrapText(m.liveCommand(), maxW) {
+		b.WriteString(headerStyle.Render("  "+l) + "\n")
+	}
+	last := m.inv.LastRun()
+	b.WriteString(hintStyle.Render(fmt.Sprintf("  %s  •  %s", last.RunAt.Format("02/01/2006 15:04:05"), last.Cwd)) + "\n\n")
+
+	b.WriteString(fmt.Sprintf("  %s  %s\n",
+		cellHeader.Render(padStr("name/flag", colNameW)),
+		cellHeader.Render(padStr("value", colValueW)),
+	))
+	b.WriteString("  " + sectionStyle.Render(strings.Repeat("─", colNameW+colValueW+4)) + "\n")
+
+	for r, dr := range m.rows {
+		isActive := r == m.row && !m.onButton()
+
+		var nameText string
+		if isActive && m.col == 0 && m.mode == modeEditing {
+			nameText = m.input.View()
+		} else {
+			nameText = padStr(dr.name, colNameW)
+		}
+
+		var valText string
+		if isActive && m.col == 1 && m.mode == modeEditing {
+			valText = m.input.View()
+		} else {
+			v := dr.value
+			if dr.secret {
+				v = "••••"
+			}
+			hint := ""
+			if !dr.secret {
+				hint = envHint(dr.value)
+			}
+			if hint != "" {
+				valText = padStr(v, colValueW) + " " + hint
+			} else {
+				valText = padStr(v, colValueW)
+			}
+		}
+
+		var nameCell, valCell string
+		switch {
+		case dr.disabled:
+			nameCell = disabledMark.Render("✗ ") + cellDisabled.Render(padStr(dr.name, colNameW))
+			valCell = cellDisabled.Render(padStr(dr.value, colValueW))
+		case isActive:
+			nameCell = styledCell(nameText, 0, m.col, cellName)
+			valCell = styledCell(valText, 1, m.col, cellValue)
+		default:
+			nameCell = cellName.Render(nameText)
+			if hint := envHint(dr.value); hint != "" && !dr.secret {
+				plain := padStr(dr.value, colValueW)
+				if dr.secret {
+					plain = padStr("••••", colValueW)
+				}
+				valCell = cellValue.Render(plain) + " " + cellEnvHint.Render(hint)
+			} else {
+				valCell = cellValue.Render(valText)
+			}
+		}
+
+		line := fmt.Sprintf("  %s  %s", nameCell, valCell)
+		if isActive {
+			line = rowActiveStyle.Render(line)
+		}
+		b.WriteString(line + "\n")
+	}
+
+	b.WriteString("\n")
+	btnStyle := runBtnNormal
+	if m.onButton() {
+		btnStyle = runBtnFocused
+	}
+	b.WriteString("  " + btnStyle.Render("exec command") + "\n")
+
+	if len(m.inv.Runs) > 1 {
+		b.WriteString("\n")
+		b.WriteString(sectionStyle.Render("  Run history") + "\n")
+		for _, r := range m.inv.Runs {
+			b.WriteString(locationStyle.Render(fmt.Sprintf("    • %s  %s", r.RunAt.Format("02/01/2006 15:04:05"), r.Cwd)) + "\n")
+		}
+	}
+
+	b.WriteString("\n")
+	if m.mode == modeEditing {
+		b.WriteString(hintStyle.Render("  enter: confirm  •  esc: cancel") + "\n")
+	} else if m.copied {
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("113")).Bold(true).Render("  ✓ copied!") + "\n")
+		b.WriteString("\n")
+	} else {
+		b.WriteString(hintStyle.Render("  hjkl/arrows: navigate  •  i: edit  •  ci: change  •  a: add row  •  dd: delete row  •  u: undo") + "\n")
+		b.WriteString(hintStyle.Render("  space: toggle row  •  s: secret  •  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  esc: back  •  q: quit") + "\n")
+	}
+
+	return b.String()
+}
+
+func styledCell(text string, col, cursorCol int, base lipgloss.Style) string {
+	if col == cursorCol {
+		return cellSelected.Render(text)
+	}
+	return base.Render(text)
+}
+
+func padStr(s string, w int) string {
+	if len(s) >= w {
+		return s[:w]
+	}
+	return s + strings.Repeat(" ", w-len(s))
+}
+
+func clearCopiedAfter() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return copiedMsg{} })
+}
