@@ -1,7 +1,7 @@
 package domain
 
 import (
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -61,7 +61,7 @@ func (inv Invocation) CommandFingerprint() string {
 			positionals = append(positionals, a.Value)
 		}
 	}
-	sort.Strings(flags)
+	slices.Sort(flags)
 	return inv.Command + "|" + strings.Join(flags, ",") + "|" + strings.Join(positionals, ",")
 }
 
@@ -73,15 +73,10 @@ func (inv Invocation) FlagSetFingerprint() string {
 			pairs = append(pairs, a.Name+"="+a.Value)
 		}
 	}
-	sort.Strings(pairs)
+	slices.Sort(pairs)
 	return strings.Join(pairs, ",")
 }
 
 func (inv Invocation) HasTag(tag string) bool {
-	for _, t := range inv.Tags {
-		if t == tag {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(inv.Tags, tag)
 }

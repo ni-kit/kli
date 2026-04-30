@@ -11,19 +11,21 @@ type appKeyMap struct {
 	Quit  key.Binding
 }
 
-var appKeys = appKeyMap{
-	Enter: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-	Back:  key.NewBinding(key.WithKeys("esc", "backspace"), key.WithHelp("esc", "back")),
-	Quit:  key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-}
-
 type histKeyMap struct {
 	Tag key.Binding
 }
 
-var histKeys = histKeyMap{
-	Tag: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "edit tags")),
-}
+var (
+	appKeys = appKeyMap{
+		Enter: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
+		Back:  key.NewBinding(key.WithKeys("esc", "backspace"), key.WithHelp("esc", "back")),
+		Quit:  key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+	}
+
+	histKeys = histKeyMap{
+		Tag: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "edit tags")),
+	}
+)
 
 func historyKeyMap() list.KeyMap {
 	km := list.DefaultKeyMap()

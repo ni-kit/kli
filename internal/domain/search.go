@@ -1,7 +1,7 @@
 package domain
 
 import (
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -67,7 +67,7 @@ func (q SearchQuery) Match(inv Invocation) bool {
 	}
 
 	for _, f := range q.Flags {
-		matched := false
+		var matched bool
 		for _, a := range inv.Args {
 			if (a.Kind == ArgShortFlag || a.Kind == ArgLongFlag) && containsFold(a.Name, f) {
 				matched = true
@@ -80,7 +80,7 @@ func (q SearchQuery) Match(inv Invocation) bool {
 	}
 
 	for _, v := range q.Values {
-		matched := false
+		var matched bool
 		for _, a := range inv.Args {
 			if containsFold(a.Value, v) {
 				matched = true
@@ -93,7 +93,7 @@ func (q SearchQuery) Match(inv Invocation) bool {
 	}
 
 	for _, p := range q.Paths {
-		matched := false
+		var matched bool
 		for _, r := range inv.Runs {
 			if containsFold(r.Cwd, p) {
 				matched = true
@@ -106,7 +106,7 @@ func (q SearchQuery) Match(inv Invocation) bool {
 	}
 
 	for _, t := range q.Tags {
-		matched := false
+		var matched bool
 		for _, tag := range inv.Tags {
 			if containsFold(tag, t) {
 				matched = true
@@ -153,12 +153,12 @@ func (q SearchQuery) Sort(invs []Invocation) {
 		return
 	}
 	asc := *q.RunsAsc
-	sort.SliceStable(invs, func(i, j int) bool {
-		li, lj := len(invs[i].Runs), len(invs[j].Runs)
+	slices.SortStableFunc(invs, func(a, b Invocation) int {
+		la, lb := len(a.Runs), len(b.Runs)
 		if asc {
-			return li < lj
+			return la - lb
 		}
-		return li > lj
+		return lb - la
 	})
 }
 
@@ -167,10 +167,12 @@ func containsFold(s, sub string) bool {
 }
 
 func SplitShellLine(line string) []string {
-	var tokens []string
-	var cur strings.Builder
-	inSingle := false
-	inDouble := false
+	var (
+		tokens   []string
+		cur      strings.Builder
+		inSingle bool
+		inDouble bool
+	)
 
 	for i := 0; i < len(line); i++ {
 		ch := line[i]

@@ -37,6 +37,25 @@ var (
 
 	runBtnNormal  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	runBtnFocused = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("34")).Padding(0, 2)
+
+	detailKeys = detailKeyMap{
+		Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Left:        key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←/h", "left")),
+		Right:       key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→/l", "right")),
+		Enter:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "edit/run")),
+		Insert:      key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "edit cell")),
+		C:           key.NewBinding(key.WithKeys("c"), key.WithHelp("ci", "change cell")),
+		D:           key.NewBinding(key.WithKeys("d"), key.WithHelp("dd", "delete row")),
+		Paste:       key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "paste")),
+		Yank:        key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy cell")),
+		YankCmd:     key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy command")),
+		AddRow:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add flag/value below")),
+		X:           key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "exec")),
+		Undo:        key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "undo")),
+		ToggleRow:   key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle row")),
+		ToggleValue: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "secret value")),
+	}
 )
 
 const numCols = 2
@@ -55,8 +74,8 @@ type detailKeyMap struct {
 	Right       key.Binding
 	Enter       key.Binding
 	Insert      key.Binding
-	C           key.Binding // arms ci (change-in-cell)
-	D           key.Binding // arms dd (delete row)
+	C           key.Binding
+	D           key.Binding
 	Paste       key.Binding
 	Yank        key.Binding
 	YankCmd     key.Binding
@@ -65,25 +84,6 @@ type detailKeyMap struct {
 	Undo        key.Binding
 	ToggleRow   key.Binding
 	ToggleValue key.Binding
-}
-
-var detailKeys = detailKeyMap{
-	Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-	Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-	Left:        key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←/h", "left")),
-	Right:       key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→/l", "right")),
-	Enter:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "edit/run")),
-	Insert:      key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "edit cell")),
-	C:           key.NewBinding(key.WithKeys("c"), key.WithHelp("ci", "change cell")),
-	D:           key.NewBinding(key.WithKeys("d"), key.WithHelp("dd", "delete row")),
-	Paste:       key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "paste")),
-	Yank:        key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy cell")),
-	YankCmd:     key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy command")),
-	AddRow:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add flag/value below")),
-	X:           key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "exec")),
-	Undo:        key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "undo")),
-	ToggleRow:   key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle row")),
-	ToggleValue: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "secret value")),
 }
 
 type displayRow struct {

@@ -42,16 +42,16 @@ var (
 	searchActive = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
 	searchHelp   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	tagEditStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("178"))
-)
 
-var tagColors = []lipgloss.Style{
-	lipgloss.NewStyle().Foreground(lipgloss.Color("178")), // yellow
-	lipgloss.NewStyle().Foreground(lipgloss.Color("74")),  // sky blue
-	lipgloss.NewStyle().Foreground(lipgloss.Color("113")), // green
-	lipgloss.NewStyle().Foreground(lipgloss.Color("204")), // pink/rose
-	lipgloss.NewStyle().Foreground(lipgloss.Color("215")), // orange
-	lipgloss.NewStyle().Foreground(lipgloss.Color("141")), // purple
-}
+	tagColors = []lipgloss.Style{
+		lipgloss.NewStyle().Foreground(lipgloss.Color("178")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("74")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("113")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("204")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("215")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("141")),
+	}
+)
 
 func tagColor(tag string) lipgloss.Style {
 	var h int

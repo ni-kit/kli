@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 
 	"github.com/ni-kit/kli/internal/domain"
 )
@@ -39,8 +39,8 @@ func (r *jsonHistoryRepo) Load() ([]domain.Invocation, error) {
 	}
 
 	invs = dedup(invs)
-	sort.Slice(invs, func(i, j int) bool {
-		return invs[i].LastRun().RunAt.After(invs[j].LastRun().RunAt)
+	slices.SortFunc(invs, func(a, b domain.Invocation) int {
+		return b.LastRun().RunAt.Compare(a.LastRun().RunAt)
 	})
 	return invs, nil
 }
@@ -60,7 +60,7 @@ func (r *jsonHistoryRepo) Append(inv domain.Invocation) error {
 
 	newRun := inv.Runs[0]
 	fp := inv.CommandFingerprint()
-	found := false
+	var found bool
 	for i := range existing {
 		if existing[i].CommandFingerprint() == fp {
 			existing[i].AddRun(newRun)
@@ -73,8 +73,8 @@ func (r *jsonHistoryRepo) Append(inv domain.Invocation) error {
 		existing = append([]domain.Invocation{inv}, existing...)
 	}
 
-	sort.Slice(existing, func(i, j int) bool {
-		return existing[i].LastRun().RunAt.After(existing[j].LastRun().RunAt)
+	slices.SortFunc(existing, func(a, b domain.Invocation) int {
+		return b.LastRun().RunAt.Compare(a.LastRun().RunAt)
 	})
 	return r.write(existing)
 }
@@ -111,8 +111,8 @@ func (r *jsonHistoryRepo) BulkAppend(incoming []domain.Invocation) error {
 		}
 	}
 
-	sort.Slice(existing, func(i, j int) bool {
-		return existing[i].LastRun().RunAt.After(existing[j].LastRun().RunAt)
+	slices.SortFunc(existing, func(a, b domain.Invocation) int {
+		return b.LastRun().RunAt.Compare(a.LastRun().RunAt)
 	})
 	return r.write(existing)
 }
@@ -148,8 +148,8 @@ func dedup(invs []domain.Invocation) []domain.Invocation {
 		}
 	}
 	for i := range result {
-		sort.Slice(result[i].Runs, func(a, b int) bool {
-			return result[i].Runs[a].RunAt.After(result[i].Runs[b].RunAt)
+		slices.SortFunc(result[i].Runs, func(a, b domain.Run) int {
+			return b.RunAt.Compare(a.RunAt)
 		})
 	}
 	return result
