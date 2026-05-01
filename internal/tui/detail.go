@@ -55,6 +55,7 @@ var (
 		Undo:        key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "undo")),
 		ToggleRow:   key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle row")),
 		ToggleValue: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "secret value")),
+		PushCell:    key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "push cell to next line")),
 	}
 )
 
@@ -84,6 +85,7 @@ type detailKeyMap struct {
 	Undo        key.Binding
 	ToggleRow   key.Binding
 	ToggleValue key.Binding
+	PushCell    key.Binding
 }
 
 type displayRow struct {
@@ -263,7 +265,7 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 	case key.Matches(msg, detailKeys.Paste):
 		if !m.onButton() {
 			text, err := clipboard.ReadAll()
-			if err == nil {
+			if err == nil && text != "" {
 				m.setCell(text)
 			}
 		}
@@ -339,10 +341,41 @@ func (m detailModel) updateEditing(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		m.input.Blur()
 		m.mode = modeNormal
 		return m, nil
+	case "ctrl+p":
+		return m.pushCell()
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+func (m detailModel) pushCell() (detailModel, tea.Cmd) {
+	cur := m.input.Value()
+	snapshot := make([]displayRow, len(m.rows))
+	copy(snapshot, m.rows)
+	m.undo = &undoEntry{rows: snapshot, rowPos: m.row}
+
+	insertAt := m.row + 1
+	newRows := make([]displayRow, len(m.rows)+1)
+	copy(newRows, m.rows[:insertAt])
+	copy(newRows[insertAt+1:], m.rows[insertAt:])
+
+	if m.col == 0 {
+		// flag cell: value stays alone in current row, flag pushed below
+		newRows[m.row] = displayRow{name: "", value: m.rows[m.row].value}
+		newRows[insertAt] = displayRow{name: cur, value: ""}
+	} else {
+		// value cell: flag stays in current row (value cleared), value goes flagless below
+		newRows[m.row] = displayRow{name: m.rows[m.row].name, value: ""}
+		newRows[insertAt] = displayRow{name: "", value: cur}
+	}
+
+	m.rows = newRows
+	m.input.Blur()
+	m.mode = modeNormal
+	m.row = insertAt
+	m.col = 0
+	return m, nil
 }
 
 func isBareSingleShortFlag(dr displayRow) bool {

@@ -89,7 +89,7 @@ func parseHistoryFile(path string) ([]domain.Invocation, error) {
 
 func parseLineHistory(f *os.File) ([]domain.Invocation, error) {
 	var invs []domain.Invocation
-	cwd, _ := os.Getwd()
+	cwd := ""
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -128,7 +128,7 @@ func parseFishHistory(f *os.File) ([]domain.Invocation, error) {
 	var invs []domain.Invocation
 	var currentCmd string
 	var currentTime time.Time
-	cwd, _ := os.Getwd()
+	cwd := ""
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {

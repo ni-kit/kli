@@ -28,6 +28,9 @@ func (i invItem) Description() string {
 	if len(i.inv.Runs) != 1 {
 		runs += "s"
 	}
+	if last.Cwd == "" {
+		return fmt.Sprintf("%s  •  %s", last.RunAt.Format("02/01/2006 15:04"), runs)
+	}
 	return fmt.Sprintf("%s  •  %s  •  %s", last.RunAt.Format("02/01/2006 15:04"), last.Cwd, runs)
 }
 
