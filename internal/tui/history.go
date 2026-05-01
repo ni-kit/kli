@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -44,24 +45,50 @@ var (
 	tagEditStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("178"))
 
 	tagColors = []lipgloss.Style{
-		lipgloss.NewStyle().Foreground(lipgloss.Color("178")),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("74")),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("113")),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("204")),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("215")),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("141")),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("178")), // yellow
+		lipgloss.NewStyle().Foreground(lipgloss.Color("74")),  // blue
+		lipgloss.NewStyle().Foreground(lipgloss.Color("113")), // green
+		lipgloss.NewStyle().Foreground(lipgloss.Color("204")), // red
+		lipgloss.NewStyle().Foreground(lipgloss.Color("215")), // orange
+		lipgloss.NewStyle().Foreground(lipgloss.Color("141")), // purple
+		lipgloss.NewStyle().Foreground(lipgloss.Color("81")),  // cyan
+		lipgloss.NewStyle().Foreground(lipgloss.Color("210")), // pink
+		lipgloss.NewStyle().Foreground(lipgloss.Color("149")), // lime
+		lipgloss.NewStyle().Foreground(lipgloss.Color("221")), // gold
+		lipgloss.NewStyle().Foreground(lipgloss.Color("111")), // periwinkle
+		lipgloss.NewStyle().Foreground(lipgloss.Color("203")), // salmon
+		lipgloss.NewStyle().Foreground(lipgloss.Color("79")),  // teal
+		lipgloss.NewStyle().Foreground(lipgloss.Color("183")), // lavender
+		lipgloss.NewStyle().Foreground(lipgloss.Color("208")), // amber
+		lipgloss.NewStyle().Foreground(lipgloss.Color("117")), // sky
 	}
+
+	tagColorMap = map[string]lipgloss.Style{}
 )
 
+func buildTagColors(invocations []domain.Invocation) {
+	seen := map[string]struct{}{}
+	for _, inv := range invocations {
+		for _, t := range inv.Tags {
+			seen[t] = struct{}{}
+		}
+	}
+	sorted := make([]string, 0, len(seen))
+	for t := range seen {
+		sorted = append(sorted, t)
+	}
+	slices.Sort(sorted)
+	tagColorMap = make(map[string]lipgloss.Style, len(sorted))
+	for i, t := range sorted {
+		tagColorMap[t] = tagColors[i%len(tagColors)]
+	}
+}
+
 func tagColor(tag string) lipgloss.Style {
-	var h int
-	for _, ch := range tag {
-		h = h*31 + int(ch)
+	if s, ok := tagColorMap[tag]; ok {
+		return s
 	}
-	if h < 0 {
-		h = -h
-	}
-	return tagColors[h%len(tagColors)]
+	return tagColors[0]
 }
 
 func renderTags(tags []string) string {
@@ -115,6 +142,7 @@ func newHistoryModel(invocations []domain.Invocation, width, height int) history
 	ti.Placeholder = "tag name"
 	ti.CharLimit = 64
 
+	buildTagColors(invocations)
 	m := historyModel{
 		allInvocations: invocations,
 		list:           l,
@@ -300,6 +328,7 @@ func (m *historyModel) setSize(w, h int) {
 }
 
 func (m *historyModel) reloadInvocations(invs []domain.Invocation) {
+	buildTagColors(invs)
 	m.allInvocations = invs
 	m.applyFilter()
 }
