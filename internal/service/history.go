@@ -11,6 +11,7 @@ type HistoryService interface {
 	All() ([]domain.Invocation, error)
 	Record(inv domain.Invocation) error
 	SetTags(invID string, tags []string) error
+	SaveLayout(invID string, args []domain.Arg) error
 }
 
 type historyService struct {
@@ -37,6 +38,20 @@ func (s *historyService) SetTags(invID string, tags []string) error {
 	for i := range invs {
 		if invs[i].ID == invID {
 			invs[i].Tags = tags
+			return s.repo.UpdateAll(invs)
+		}
+	}
+	return fmt.Errorf("invocation %q not found", invID)
+}
+
+func (s *historyService) SaveLayout(invID string, args []domain.Arg) error {
+	invs, err := s.repo.Load()
+	if err != nil {
+		return err
+	}
+	for i := range invs {
+		if invs[i].ID == invID {
+			invs[i].Args = args
 			return s.repo.UpdateAll(invs)
 		}
 	}

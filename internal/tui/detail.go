@@ -107,18 +107,46 @@ func buildRows(args []domain.Arg) []displayRow {
 		case domain.ArgShortFlag, domain.ArgLongFlag:
 			name := flagLabel(a)
 			value := ""
+			secret := a.Redacted
 			if i+1 < len(args) && args[i+1].Kind == domain.ArgFlagValue {
 				i++
 				value = args[i].Value
+				if args[i].Redacted {
+					secret = true
+				}
 			}
-			rows = append(rows, displayRow{name: name, value: value})
+			rows = append(rows, displayRow{name: name, value: value, secret: secret})
 		case domain.ArgPositional:
-			rows = append(rows, displayRow{name: "", value: a.Value})
+			rows = append(rows, displayRow{name: "", value: a.Value, secret: a.Redacted})
 		case domain.ArgFlagValue:
-			rows = append(rows, displayRow{name: "", value: a.Value})
+			rows = append(rows, displayRow{name: "", value: a.Value, secret: a.Redacted})
 		}
 	}
 	return rows
+}
+
+func rowsToArgs(rows []displayRow) []domain.Arg {
+	args := make([]domain.Arg, 0, len(rows)*2)
+	for _, dr := range rows {
+		if dr.name == "" {
+			if dr.value != "" {
+				args = append(args, domain.Arg{Kind: domain.ArgPositional, Value: dr.value, Redacted: dr.secret})
+			}
+			continue
+		}
+		switch {
+		case len(dr.name) >= 2 && dr.name[:2] == "--":
+			args = append(args, domain.Arg{Kind: domain.ArgLongFlag, Name: dr.name[2:], Redacted: dr.secret})
+		case dr.name[0] == '-':
+			args = append(args, domain.Arg{Kind: domain.ArgShortFlag, Name: dr.name[1:], Redacted: dr.secret})
+		default:
+			args = append(args, domain.Arg{Kind: domain.ArgPositional, Value: dr.name, Redacted: dr.secret})
+		}
+		if dr.value != "" {
+			args = append(args, domain.Arg{Kind: domain.ArgFlagValue, Value: dr.value, Redacted: dr.secret})
+		}
+	}
+	return args
 }
 
 func flagLabel(a domain.Arg) string {
@@ -156,9 +184,11 @@ type detailModel struct {
 	helpVisible   bool
 }
 
-func (m detailModel) ExecRequested() bool { return m.execRequested }
-func (m detailModel) ExecArgv() []string  { return m.liveArgv() }
-func (m detailModel) onButton() bool      { return m.row == len(m.rows) }
+func (m detailModel) ExecRequested() bool       { return m.execRequested }
+func (m detailModel) ExecArgv() []string        { return m.liveArgv() }
+func (m detailModel) InvocationID() string      { return m.inv.ID }
+func (m detailModel) CurrentArgs() []domain.Arg { return rowsToArgs(m.rows) }
+func (m detailModel) onButton() bool            { return m.row == len(m.rows) }
 
 func newDetailModel(inv domain.Invocation, width int) detailModel {
 	ti := textinput.New()
@@ -354,8 +384,6 @@ func (m detailModel) updateEditing(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		m.input.Blur()
 		m.mode = modeNormal
 		return m, nil
-	case "M":
-		return m.pushCell()
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -363,11 +391,6 @@ func (m detailModel) updateEditing(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 }
 
 func (m detailModel) pushCell() (detailModel, tea.Cmd) {
-	if m.mode == modeEditing {
-		m.setCell(m.input.Value())
-		m.input.Blur()
-		m.mode = modeNormal
-	}
 	cur := m.currentCell()
 	snapshot := make([]displayRow, len(m.rows))
 	copy(snapshot, m.rows)

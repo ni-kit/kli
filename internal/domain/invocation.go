@@ -50,12 +50,29 @@ func (inv Invocation) FullCommand() string {
 	return inv.Command + " " + inv.ArgsString()
 }
 
+// expandShortFlag returns individual single-letter names for a short flag,
+// so that -lah and -l -a -h produce the same fingerprint.
+func expandShortFlag(a Arg) []string {
+	if a.Kind != ArgShortFlag || len(a.Name) <= 1 {
+		return []string{a.Name}
+	}
+	letters := make([]string, len(a.Name))
+	for i, ch := range a.Name {
+		letters[i] = string(ch)
+	}
+	return letters
+}
+
 func (inv Invocation) CommandFingerprint() string {
 	var flags []string
 	var positionals []string
 	for _, a := range inv.Args {
 		switch a.Kind {
-		case ArgShortFlag, ArgLongFlag:
+		case ArgShortFlag:
+			for _, letter := range expandShortFlag(a) {
+				flags = append(flags, letter+"="+a.Value)
+			}
+		case ArgLongFlag:
 			flags = append(flags, a.Name+"="+a.Value)
 		case ArgPositional, ArgFlagValue:
 			positionals = append(positionals, a.Value)
@@ -69,7 +86,11 @@ func (inv Invocation) FlagSetFingerprint() string {
 	var pairs []string
 	for _, a := range inv.Args {
 		switch a.Kind {
-		case ArgShortFlag, ArgLongFlag:
+		case ArgShortFlag:
+			for _, letter := range expandShortFlag(a) {
+				pairs = append(pairs, letter+"="+a.Value)
+			}
+		case ArgLongFlag:
 			pairs = append(pairs, a.Name+"="+a.Value)
 		}
 	}

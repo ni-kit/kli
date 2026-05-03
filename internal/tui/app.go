@@ -116,6 +116,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			switch {
 			case key.Matches(msg, appKeys.Back):
+				a.historySvc.SaveLayout(a.detail.InvocationID(), a.detail.CurrentArgs()) //nolint:errcheck
 				a.screen = screenHistory
 				return a, nil
 			case key.Matches(msg, appKeys.Quit):
