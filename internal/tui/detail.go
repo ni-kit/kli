@@ -565,6 +565,10 @@ func (m detailModel) liveArgv() []string {
 	return append([]string{m.inv.Command}, tokens...)
 }
 
+func (m detailModel) rawArgv() []string {
+	return append([]string{m.inv.Command}, mergedTokens(m.rows, true)...)
+}
+
 func (m detailModel) copyCommand() string {
 	return strings.Join(append([]string{m.inv.Command}, mergedTokens(m.rows, false)...), " ")
 }

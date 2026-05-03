@@ -167,3 +167,11 @@ func (a *App) ExecArgv() []string {
 	}
 	return a.detail.ExecArgv()
 }
+
+// RecordArgv returns the unexpanded argv to save to history (env vars kept as-is).
+func (a *App) RecordArgv() []string {
+	if len(a.histExecArgv) > 0 {
+		return a.histExecArgv
+	}
+	return a.detail.rawArgv()
+}

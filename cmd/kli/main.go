@@ -124,7 +124,7 @@ func main() {
 
 	if app.ExecRequested() {
 		argv := app.ExecArgv()
-		executed := service.Parse(argv)
+		executed := service.Parse(app.RecordArgv())
 		if err := historySvc.Record(executed); err != nil {
 			fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 		}
