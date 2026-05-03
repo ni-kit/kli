@@ -55,7 +55,9 @@ var (
 		Undo:        key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "undo")),
 		ToggleRow:   key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle row")),
 		ToggleValue: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "secret value")),
-		PushCell:    key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "push cell to next line")),
+		PushCell:    key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "push cell to next line")),
+		MergeBack:   key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "merge flag into previous row")),
+		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
 	}
 )
 
@@ -86,6 +88,8 @@ type detailKeyMap struct {
 	ToggleRow   key.Binding
 	ToggleValue key.Binding
 	PushCell    key.Binding
+	MergeBack   key.Binding
+	Help        key.Binding
 }
 
 type displayRow struct {
@@ -149,6 +153,7 @@ type detailModel struct {
 	execRequested bool
 	undo          *undoEntry
 	copied        bool // flash "copied!" feedback
+	helpVisible   bool
 }
 
 func (m detailModel) ExecRequested() bool { return m.execRequested }
@@ -252,6 +257,12 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		if !m.onButton() {
 			m.rows[m.row].secret = !m.rows[m.row].secret
 		}
+	case key.Matches(msg, detailKeys.MergeBack):
+		m = m.mergeBack()
+	case key.Matches(msg, detailKeys.PushCell):
+		if !m.onButton() {
+			m, _ = m.pushCell()
+		}
 	case key.Matches(msg, detailKeys.Yank):
 		if !m.onButton() {
 			clipboard.WriteAll(m.currentCell()) //nolint:errcheck
@@ -288,6 +299,8 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			m.col = 0
 			return m.startEditing("")
 		}
+	case key.Matches(msg, detailKeys.Help):
+		m.helpVisible = !m.helpVisible
 	case key.Matches(msg, detailKeys.Undo):
 		if m.undo != nil {
 			if m.undo.rows != nil {
@@ -341,7 +354,7 @@ func (m detailModel) updateEditing(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		m.input.Blur()
 		m.mode = modeNormal
 		return m, nil
-	case "ctrl+p":
+	case "M":
 		return m.pushCell()
 	}
 	var cmd tea.Cmd
@@ -350,32 +363,115 @@ func (m detailModel) updateEditing(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 }
 
 func (m detailModel) pushCell() (detailModel, tea.Cmd) {
-	cur := m.input.Value()
+	if m.mode == modeEditing {
+		m.setCell(m.input.Value())
+		m.input.Blur()
+		m.mode = modeNormal
+	}
+	cur := m.currentCell()
 	snapshot := make([]displayRow, len(m.rows))
 	copy(snapshot, m.rows)
 	m.undo = &undoEntry{rows: snapshot, rowPos: m.row}
 
 	insertAt := m.row + 1
-	newRows := make([]displayRow, len(m.rows)+1)
-	copy(newRows, m.rows[:insertAt])
-	copy(newRows[insertAt+1:], m.rows[insertAt:])
 
-	if m.col == 0 {
-		// flag cell: value stays alone in current row, flag pushed below
-		newRows[m.row] = displayRow{name: "", value: m.rows[m.row].value}
-		newRows[insertAt] = displayRow{name: cur, value: ""}
+	if m.col == 0 && isShortFlagCluster(m.rows[m.row]) && len(m.rows[m.row].name) > 2 {
+		// cluster: peel last flag letter; reuse next row only if completely empty
+		peeled := "-" + string(cur[len(cur)-1])
+		if insertAt < len(m.rows) && m.rows[insertAt].name == "" && m.rows[insertAt].value == "" {
+			m.rows[m.row].name = cur[:len(cur)-1]
+			m.rows[insertAt].name = peeled
+		} else {
+			newRows := make([]displayRow, len(m.rows)+1)
+			copy(newRows, m.rows[:insertAt])
+			copy(newRows[insertAt+1:], m.rows[insertAt:])
+			newRows[m.row] = displayRow{name: cur[:len(cur)-1], value: ""}
+			newRows[insertAt] = displayRow{name: peeled, value: ""}
+			m.rows = newRows
+		}
+	} else if m.col == 0 && isSingleShortFlag(m.rows[m.row]) && m.rows[m.row].value == "" &&
+		insertAt < len(m.rows) && isShortFlagCluster(m.rows[insertAt]) {
+		// single short flag pushed into next short flag cluster — merge forward
+		m.rows[insertAt].name = "-" + cur[1:] + m.rows[insertAt].name[1:]
+		m.rows[m.row].name = ""
+	} else if m.col == 0 && insertAt < len(m.rows) && m.rows[insertAt].name == "" {
+		// next row has empty flag slot — move flag there without inserting
+		m.rows[insertAt].name = cur
+		m.rows[m.row].name = ""
 	} else {
-		// value cell: flag stays in current row (value cleared), value goes flagless below
-		newRows[m.row] = displayRow{name: m.rows[m.row].name, value: ""}
-		newRows[insertAt] = displayRow{name: "", value: cur}
+		newRows := make([]displayRow, len(m.rows)+1)
+		copy(newRows, m.rows[:insertAt])
+		copy(newRows[insertAt+1:], m.rows[insertAt:])
+		if m.col == 0 {
+			newRows[m.row] = displayRow{name: "", value: m.rows[m.row].value}
+			newRows[insertAt] = displayRow{name: cur, value: ""}
+		} else {
+			newRows[m.row] = displayRow{name: m.rows[m.row].name, value: ""}
+			newRows[insertAt] = displayRow{name: "", value: cur}
+		}
+		m.rows = newRows
 	}
 
-	m.rows = newRows
-	m.input.Blur()
-	m.mode = modeNormal
 	m.row = insertAt
 	m.col = 0
 	return m, nil
+}
+
+func isSingleShortFlag(dr displayRow) bool {
+	return len(dr.name) == 2 && dr.name[0] == '-'
+}
+
+func isShortFlagCluster(dr displayRow) bool {
+	return len(dr.name) >= 2 && dr.name[0] == '-' && dr.name[1] != '-' && dr.value == ""
+}
+
+func (m detailModel) mergeBack() detailModel {
+	if m.onButton() || m.row == 0 {
+		return m
+	}
+	cur := m.rows[m.row]
+	prev := m.rows[m.row-1]
+
+	isFlag := cur.name != "" && cur.name[0] == '-'
+	if !isFlag {
+		return m
+	}
+
+	// short-flag cluster merge: prev must be a short flag cluster or empty
+	isShort := isShortFlagCluster(cur) || isSingleShortFlag(cur)
+	prevAcceptsCluster := isShortFlagCluster(prev) || prev.name == ""
+
+	if isShort && prevAcceptsCluster {
+		snapshot := make([]displayRow, len(m.rows))
+		copy(snapshot, m.rows)
+		m.undo = &undoEntry{rows: snapshot, rowPos: m.row}
+		if prev.name == "" {
+			m.rows[m.row-1].name = cur.name
+		} else {
+			m.rows[m.row-1].name = prev.name + cur.name[1:]
+		}
+		if cur.value != "" {
+			m.rows[m.row].name = ""
+			m.row--
+		} else {
+			m.rows = append(m.rows[:m.row], m.rows[m.row+1:]...)
+			m.row--
+		}
+		return m
+	}
+
+	// any flag: move into previous row if its name is empty
+	if prev.name == "" {
+		snapshot := make([]displayRow, len(m.rows))
+		copy(snapshot, m.rows)
+		m.undo = &undoEntry{rows: snapshot, rowPos: m.row}
+		m.rows[m.row-1].name = cur.name
+		m.rows[m.row].name = ""
+		m.row--
+		return m
+	}
+
+	return m
 }
 
 func isBareSingleShortFlag(dr displayRow) bool {
@@ -554,9 +650,12 @@ func (m detailModel) View() string {
 	} else if m.copied {
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("113")).Bold(true).Render("  ✓ copied!") + "\n")
 		b.WriteString("\n")
+	} else if m.helpVisible {
+		b.WriteString(hintStyle.Render("  hjkl/arrows: navigate  •  i/enter: edit  •  ci: change  •  a: add row  •  dd: delete row  •  u: undo") + "\n")
+		b.WriteString(hintStyle.Render("  m: merge flag back  •  M: push flag forward  •  space: toggle row  •  s: secret") + "\n")
+		b.WriteString(hintStyle.Render("  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  esc: back  •  q: quit  •  ?: hide") + "\n")
 	} else {
-		b.WriteString(hintStyle.Render("  hjkl/arrows: navigate  •  i: edit  •  ci: change  •  a: add row  •  dd: delete row  •  u: undo") + "\n")
-		b.WriteString(hintStyle.Render("  space: toggle row  •  s: secret  •  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  esc: back  •  q: quit") + "\n")
+		b.WriteString(hintStyle.Render("  hjkl: navigate  •  i: edit  •  a: add row  •  dd: delete  •  m/M: move flag  •  x: exec  •  ?: more") + "\n")
 	}
 
 	return b.String()
