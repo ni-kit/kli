@@ -112,6 +112,8 @@ func main() {
 			os.Exit(1)
 		}
 		app = tui.NewAppOnDetail(invocations[0], invocations, historySvc)
+	} else if !isFlag && len(args) > 0 {
+		app = tui.NewAppOnDetail(invocations[0], invocations, historySvc)
 	} else {
 		app = tui.NewApp(invocations, historySvc)
 	}
