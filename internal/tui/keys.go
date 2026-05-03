@@ -12,7 +12,8 @@ type appKeyMap struct {
 }
 
 type histKeyMap struct {
-	Tag key.Binding
+	Tag    key.Binding
+	Delete key.Binding
 }
 
 var (
@@ -23,12 +24,15 @@ var (
 	}
 
 	histKeys = histKeyMap{
-		Tag: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "edit tags")),
+		Tag:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "edit tags")),
+		Delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("dd", "delete")),
 	}
 )
 
 func historyKeyMap() list.KeyMap {
 	km := list.DefaultKeyMap()
 	km.Quit.SetEnabled(false)
+	// remove d from NextPage so we can use it for dd-delete
+	km.NextPage.SetKeys("right", "l", "pgdown", "f")
 	return km
 }

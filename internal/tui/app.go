@@ -69,6 +69,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case deleteInvMsg:
+		if err := a.historySvc.Delete(msg.id); err == nil {
+			if invs, err := a.historySvc.All(); err == nil {
+				a.invocations = invs
+				a.history.reloadInvocations(invs)
+			}
+		}
+		return a, nil
+
 	case tea.KeyPressMsg:
 		switch a.screen {
 		case screenHistory:
@@ -116,7 +125,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			switch {
 			case key.Matches(msg, appKeys.Back):
-				a.historySvc.SaveLayout(a.detail.InvocationID(), a.detail.CurrentArgs()) //nolint:errcheck
+				if err := a.historySvc.SaveLayout(a.detail.InvocationID(), a.detail.CurrentArgs()); err == nil {
+					if invs, err := a.historySvc.All(); err == nil {
+						a.invocations = invs
+						a.history.reloadInvocations(invs)
+					}
+				}
 				a.screen = screenHistory
 				return a, nil
 			case key.Matches(msg, appKeys.Quit):

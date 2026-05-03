@@ -124,6 +124,7 @@ type historyModel struct {
 	mode           historyMode
 	searchInput    textinput.Model
 	tagInput       textinput.Model
+	pendingD       bool
 }
 
 func newHistoryModel(invocations []domain.Invocation, width, height int) historyModel {
@@ -206,16 +207,30 @@ func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
 func (m historyModel) updateNormal(msg tea.KeyPressMsg) (historyModel, tea.Cmd) {
 	switch {
 	case msg.String() == "/":
+		m.pendingD = false
 		m.mode = histModeSearch
 		cmd := m.searchInput.Focus()
 		return m, cmd
 	case key.Matches(msg, histKeys.Tag):
+		m.pendingD = false
 		if inv := m.selectedInvocation(); inv != nil {
 			m.mode = histModeEditTags
 			m.tagInput.SetValue(strings.Join(inv.Tags, ", "))
 			cmd := m.tagInput.Focus()
 			return m, cmd
 		}
+	case key.Matches(msg, histKeys.Delete):
+		if m.pendingD {
+			m.pendingD = false
+			if inv := m.selectedInvocation(); inv != nil {
+				return m, deleteInvCmd(inv.ID)
+			}
+		} else {
+			m.pendingD = true
+		}
+		return m, nil
+	default:
+		m.pendingD = false
 	}
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
@@ -295,7 +310,12 @@ func (m historyModel) View() string {
 			}
 			preview := wrapText(inv.FullCommand(), maxW)[0] // first line only
 			b.WriteString(previewStyle.Render("  "+preview) + "\n")
-			hint := "  enter: edit  •  x: exec  •  /: search  •  t: edit tags"
+			hint := "  enter: edit  •  x: exec  •  /: search  •  t: edit tags  •  dd: delete"
+			if m.pendingD {
+				b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("  dd: press d again to confirm delete") + "\n")
+				b.WriteString(m.list.View())
+				return b.String()
+			}
 			if raw != "" {
 				hint += searchStyle.Render("  [" + raw + "]")
 			}
@@ -350,4 +370,10 @@ type setTagsInvMsg struct {
 
 func setTagsMsg(id string, tags []string) tea.Cmd {
 	return func() tea.Msg { return setTagsInvMsg{id: id, tags: tags} }
+}
+
+type deleteInvMsg struct{ id string }
+
+func deleteInvCmd(id string) tea.Cmd {
+	return func() tea.Msg { return deleteInvMsg{id: id} }
 }
