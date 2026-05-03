@@ -78,11 +78,15 @@ Opens when you press `enter` on a history entry. Shows command, args and flags a
 | `y` | Copy cell to clipboard |
 | `Y` | Copy full command to clipboard |
 | `p` | Paste clipboard into cell |
+| `m` | Merge flag into previous row |
+| `M` | Push flag/value to next row |
 | `u` | Undo last edit |
 | `x` | Exec command |
 | `esc` | Back to history list |
 
 Env vars in values are expanded on exec and previewed inline (e.g. `$HOME` → `/Users/you`).
+
+`m` and `M` reorganize how flags and values are split across rows — useful for clustering short flags (e.g. merging `-v` and `-x` into `-vx`) or splitting them apart.
 
 ## Tags
 
