@@ -398,6 +398,10 @@ func (m detailModel) pushCell() (detailModel, tea.Cmd) {
 		// next row has empty flag slot — move flag there without inserting
 		m.rows[insertAt].name = cur
 		m.rows[m.row].name = ""
+	} else if m.col == 1 && insertAt < len(m.rows) && m.rows[insertAt].value == "" {
+		// next row has empty value slot — move value there without inserting
+		m.rows[insertAt].value = cur
+		m.rows[m.row].value = ""
 	} else {
 		newRows := make([]displayRow, len(m.rows)+1)
 		copy(newRows, m.rows[:insertAt])
@@ -413,7 +417,7 @@ func (m detailModel) pushCell() (detailModel, tea.Cmd) {
 	}
 
 	m.row = insertAt
-	m.col = 0
+	// col stays as-is: col=1 lands on the value slot, col=0 on the name slot
 	return m, nil
 }
 
@@ -431,6 +435,17 @@ func (m detailModel) mergeBack() detailModel {
 	}
 	cur := m.rows[m.row]
 	prev := m.rows[m.row-1]
+
+	// value cell: move into previous row's value slot if it's empty
+	if m.col == 1 && cur.value != "" && prev.value == "" {
+		snapshot := make([]displayRow, len(m.rows))
+		copy(snapshot, m.rows)
+		m.undo = &undoEntry{rows: snapshot, rowPos: m.row}
+		m.rows[m.row-1].value = cur.value
+		m.rows[m.row].value = ""
+		m.row--
+		return m
+	}
 
 	isFlag := cur.name != "" && cur.name[0] == '-'
 	if !isFlag {
