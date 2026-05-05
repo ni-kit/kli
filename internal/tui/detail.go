@@ -55,6 +55,7 @@ var (
 		Undo:        key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "undo")),
 		ToggleRow:   key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle row")),
 		ToggleValue: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "secret value")),
+		Save:        key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "save")),
 		PushCell:    key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "push cell to next line")),
 		MergeBack:   key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "merge flag into previous row")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
@@ -87,6 +88,7 @@ type detailKeyMap struct {
 	Undo        key.Binding
 	ToggleRow   key.Binding
 	ToggleValue key.Binding
+	Save        key.Binding
 	PushCell    key.Binding
 	MergeBack   key.Binding
 	Help        key.Binding
@@ -167,6 +169,7 @@ type undoEntry struct {
 }
 
 type copiedMsg struct{}
+type savedMsg struct{}
 
 type detailModel struct {
 	inv           domain.Invocation
@@ -180,15 +183,18 @@ type detailModel struct {
 	input         textinput.Model
 	execRequested bool
 	undo          *undoEntry
-	copied        bool // flash "copied!" feedback
+	copied        bool
+	saved         bool
 	helpVisible   bool
 }
 
-func (m detailModel) ExecRequested() bool       { return m.execRequested }
-func (m detailModel) ExecArgv() []string        { return m.liveArgv() }
-func (m detailModel) InvocationID() string      { return m.inv.ID }
-func (m detailModel) CurrentArgs() []domain.Arg { return rowsToArgs(m.rows) }
-func (m detailModel) onButton() bool            { return m.row == len(m.rows) }
+func (m detailModel) ExecRequested() bool                   { return m.execRequested }
+func (m detailModel) SaveRequested() bool                   { return m.saved }
+func (m detailModel) ExecArgv() []string                    { return m.liveArgv() }
+func (m detailModel) InvocationID() string                  { return m.inv.ID }
+func (m detailModel) OriginalInvocation() domain.Invocation { return m.inv }
+func (m detailModel) CurrentArgs() []domain.Arg             { return rowsToArgs(m.rows) }
+func (m detailModel) onButton() bool                        { return m.row == len(m.rows) }
 
 func newDetailModel(inv domain.Invocation, width int) detailModel {
 	ti := textinput.New()
@@ -212,6 +218,9 @@ func (m detailModel) Update(msg tea.Msg) (detailModel, tea.Cmd) {
 		return m.updateNormal(msg)
 	case copiedMsg:
 		m.copied = false
+		return m, nil
+	case savedMsg:
+		m.saved = false
 		return m, nil
 	default:
 		if m.mode == modeEditing {
@@ -287,6 +296,9 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		if !m.onButton() {
 			m.rows[m.row].secret = !m.rows[m.row].secret
 		}
+	case key.Matches(msg, detailKeys.Save):
+		m.saved = true
+		return m, clearSavedAfter()
 	case key.Matches(msg, detailKeys.MergeBack):
 		m = m.mergeBack()
 	case key.Matches(msg, detailKeys.PushCell):
@@ -692,12 +704,15 @@ func (m detailModel) View() string {
 	} else if m.copied {
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("113")).Bold(true).Render("  ✓ copied!") + "\n")
 		b.WriteString("\n")
+	} else if m.saved {
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("113")).Bold(true).Render("  ✓ saved!") + "\n")
+		b.WriteString("\n")
 	} else if m.helpVisible {
 		b.WriteString(hintStyle.Render("  hjkl/arrows: navigate  •  i/enter: edit  •  ci: change  •  a: add row  •  dd: delete row  •  u: undo") + "\n")
-		b.WriteString(hintStyle.Render("  m: merge flag back  •  M: push flag forward  •  space: toggle row  •  s: secret") + "\n")
+		b.WriteString(hintStyle.Render("  m: merge flag back  •  M: push flag forward  •  space: toggle row  •  s: secret  •  S: save") + "\n")
 		b.WriteString(hintStyle.Render("  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  esc: back  •  q: quit  •  ?: hide") + "\n")
 	} else {
-		b.WriteString(hintStyle.Render("  hjkl: navigate  •  i: edit  •  a: add row  •  dd: delete  •  m/M: move flag  •  x: exec  •  ?: more") + "\n")
+		b.WriteString(hintStyle.Render("  hjkl: navigate  •  i: edit  •  a: add row  •  dd: delete  •  m/M: move flag  •  S: save  •  x: exec  •  ?: more") + "\n")
 	}
 
 	return b.String()
@@ -719,4 +734,8 @@ func padStr(s string, w int) string {
 
 func clearCopiedAfter() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return copiedMsg{} })
+}
+
+func clearSavedAfter() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return savedMsg{} })
 }

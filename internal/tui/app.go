@@ -125,12 +125,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			switch {
 			case key.Matches(msg, appKeys.Back):
-				if err := a.historySvc.SaveLayout(a.detail.InvocationID(), a.detail.CurrentArgs()); err == nil {
-					if invs, err := a.historySvc.All(); err == nil {
-						a.invocations = invs
-						a.history.reloadInvocations(invs)
-					}
-				}
 				a.screen = screenHistory
 				return a, nil
 			case key.Matches(msg, appKeys.Quit):
@@ -138,6 +132,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				var cmd tea.Cmd
 				a.detail, cmd = a.detail.Update(msg)
+				if a.detail.SaveRequested() {
+					a.saveDetail()
+				}
 				return a, cmd
 			}
 		}
@@ -180,6 +177,25 @@ func (a *App) ExecArgv() []string {
 		return a.histExecArgv
 	}
 	return a.detail.ExecArgv()
+}
+
+func (a *App) saveDetail() {
+	orig := a.detail.OriginalInvocation()
+	currentArgs := a.detail.CurrentArgs()
+
+	candidate := domain.Invocation{Command: orig.Command, Args: currentArgs}
+	if candidate.CommandFingerprint() == orig.CommandFingerprint() {
+		// only layout changed (reordering) — mutate in place
+		_ = a.historySvc.SaveLayout(orig.ID, currentArgs)
+	} else {
+		// values/flags changed — record as a new entry
+		_ = a.historySvc.Record(candidate)
+	}
+
+	if invs, err := a.historySvc.All(); err == nil {
+		a.invocations = invs
+		a.history.reloadInvocations(invs)
+	}
 }
 
 // RecordArgv returns the unexpanded argv to save to history (env vars kept as-is).
