@@ -50,6 +50,15 @@ func (inv Invocation) FullCommand() string {
 	return inv.Command + " " + inv.ArgsString()
 }
 
+func (inv Invocation) RawArgv() []string {
+	argv := make([]string, 0, 1+len(inv.Args))
+	argv = append(argv, inv.Command)
+	for _, arg := range inv.Args {
+		argv = append(argv, arg.RawDisplay())
+	}
+	return argv
+}
+
 // expandShortFlag returns individual single-letter names for a short flag,
 // so that -lah and -l -a -h produce the same fingerprint.
 func expandShortFlag(a Arg) []string {
@@ -100,4 +109,13 @@ func (inv Invocation) FlagSetFingerprint() string {
 
 func (inv Invocation) HasTag(tag string) bool {
 	return slices.Contains(inv.Tags, tag)
+}
+
+func (inv Invocation) LastRunInDir(cwd string) (Run, bool) {
+	for _, run := range inv.Runs {
+		if run.Cwd == cwd {
+			return run, true
+		}
+	}
+	return Run{}, false
 }

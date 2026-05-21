@@ -12,12 +12,33 @@ kli git commit -am "fix bug"
 # Open history browser (no args, imports shell history)
 kli
 
+# Open history browser filtered to commands run in the current directory
+kli .
+
 # Open the most recent kli history entry in edit mode
 kli -l
 kli --latest
 
+# Show the most recent command and ask before opening it in the TUI
+kli -ly
+
 # Exec the most recent kli history entry immediately (no TUI)
 kli -lx
+
+# Exec the most recent kli history entry from the current directory
+kli -lx .
+
+# Show the most recent command and ask before executing it
+kli -lxy
+
+# Show and prompt before executing the most recent command from the current directory
+kli -lxy .
+
+# Print the most recent command without opening or executing it
+kli -le
+
+# Print the most recent command from the current directory
+kli -le .
 
 # Record and exec immediately (no TUI)
 kli -x <cmd> [args...]
@@ -58,6 +79,8 @@ Press `/` to open the search bar. Filters are ANDed. Free text matches anywhere 
 | `T:text` | Tag |
 | `D:text` | Date (substring of `YYYY-MM-DD`) |
 | `R:asc` / `R:desc` | Sort by run count |
+
+`P:.` is a shortcut for the current working directory.
 
 `enter` confirms the filter and returns to navigation. `esc` clears the filter.
 

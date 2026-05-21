@@ -127,7 +127,7 @@ type historyModel struct {
 	pendingD       bool
 }
 
-func newHistoryModel(invocations []domain.Invocation, width, height int) historyModel {
+func newHistoryModel(invocations []domain.Invocation, width, height int, initialSearch string) historyModel {
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
 	delegate.SetSpacing(0)
@@ -141,6 +141,7 @@ func newHistoryModel(invocations []domain.Invocation, width, height int) history
 	si := textinput.New()
 	si.Placeholder = "search… (C:cmd F:flag V:val P:path T:tag D:date R:asc/desc)"
 	si.CharLimit = 200
+	si.SetValue(initialSearch)
 
 	ti := textinput.New()
 	ti.Placeholder = "tag name"

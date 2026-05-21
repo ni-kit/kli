@@ -47,3 +47,18 @@ func (a Arg) Display() string {
 	}
 	return ""
 }
+
+func (a Arg) RawDisplay() string {
+	switch a.Kind {
+	case ArgShortFlag:
+		return "-" + a.Name
+	case ArgLongFlag:
+		if a.Value != "" {
+			return "--" + a.Name + "=" + a.Value
+		}
+		return "--" + a.Name
+	case ArgFlagValue, ArgPositional:
+		return a.Value
+	}
+	return ""
+}

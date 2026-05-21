@@ -24,14 +24,20 @@ type App struct {
 	width         int
 	height        int
 	histExecArgv  []string
+	initialSearch string
 	startOnDetail *domain.Invocation // non-nil → open detail screen immediately
 }
 
 func NewApp(invocations []domain.Invocation, historySvc service.HistoryService) *App {
+	return NewAppWithSearch(invocations, historySvc, "")
+}
+
+func NewAppWithSearch(invocations []domain.Invocation, historySvc service.HistoryService, initialSearch string) *App {
 	return &App{
-		screen:      screenHistory,
-		invocations: invocations,
-		historySvc:  historySvc,
+		screen:        screenHistory,
+		invocations:   invocations,
+		historySvc:    historySvc,
+		initialSearch: initialSearch,
 	}
 }
 
@@ -45,7 +51,7 @@ func NewAppOnDetail(inv domain.Invocation, invocations []domain.Invocation, hist
 }
 
 func (a *App) Init() tea.Cmd {
-	a.history = newHistoryModel(a.invocations, a.width, a.height)
+	a.history = newHistoryModel(a.invocations, a.width, a.height, a.initialSearch)
 	if a.startOnDetail != nil {
 		a.detail = newDetailModel(*a.startOnDetail, a.width)
 	}
@@ -99,12 +105,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case msg.String() == "x":
 				inv := a.history.selectedInvocation()
 				if inv != nil {
-					argv := make([]string, 0, 1+len(inv.Args))
-					argv = append(argv, inv.Command)
-					for _, arg := range inv.Args {
-						argv = append(argv, arg.Display())
-					}
-					a.histExecArgv = argv
+					a.histExecArgv = inv.RawArgv()
 					return a, tea.Quit
 				}
 				return a, nil

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"os"
 	"slices"
 	"strings"
 )
@@ -30,7 +31,7 @@ func ParseQuery(input string) SearchQuery {
 		case hasPrefix(tok, "V:"):
 			q.Values = append(q.Values, tok[2:])
 		case hasPrefix(tok, "P:"):
-			q.Paths = append(q.Paths, tok[2:])
+			q.Paths = append(q.Paths, normalizePathToken(tok[2:]))
 		case hasPrefix(tok, "T:"):
 			q.Tags = append(q.Tags, tok[2:])
 		case hasPrefix(tok, "D:"):
@@ -164,6 +165,17 @@ func (q SearchQuery) Sort(invs []Invocation) {
 
 func containsFold(s, sub string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(sub))
+}
+
+func normalizePathToken(path string) string {
+	if path != "." {
+		return path
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return path
+	}
+	return cwd
 }
 
 func SplitShellLine(line string) []string {
