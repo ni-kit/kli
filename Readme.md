@@ -19,7 +19,7 @@ kli .
 kli -l
 kli --latest
 
-# Show the most recent command and ask before opening it in the TUI
+# Show the most recent command and don't ask before opening it in the TUI
 kli -ly
 
 # Exec the most recent kli history entry immediately (no TUI)
@@ -28,10 +28,10 @@ kli -lx
 # Exec the most recent kli history entry from the current directory
 kli -lx .
 
-# Show the most recent command and ask before executing it
+# Show the most recent command and don't ask before executing it
 kli -lxy
 
-# Show and prompt before executing the most recent command from the current directory
+# Show and execute the most recent command from the current directory
 kli -lxy .
 
 # Print the most recent command without opening or executing it
