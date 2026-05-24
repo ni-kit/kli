@@ -147,19 +147,19 @@ func parseCLIOptions(args []string) cliOptions {
 	if len(args) == 1 && args[0] == "." {
 		return cliOptions{initialSearch: "P:."}
 	}
-	if opts, ok := latestOptions(args, "-l", "--latest", latestOpen, false); ok {
+	if opts, ok := latestOptions(args, "-l", "--latest", latestOpen, true); ok {
 		return opts
 	}
-	if opts, ok := latestOptions(args, "-ly", "", latestOpen, true); ok {
+	if opts, ok := latestOptions(args, "-ly", "", latestOpen, false); ok {
 		return opts
 	}
-	if opts, ok := latestOptions(args, "-lx", "", latestExec, false); ok {
+	if opts, ok := latestOptions(args, "-lx", "", latestExec, true); ok {
 		return opts
 	}
-	if opts, ok := latestOptions(args, "-lxy", "", latestExec, true); ok {
+	if opts, ok := latestOptions(args, "-lxy", "", latestExec, false); ok {
 		return opts
 	}
-	if opts, ok := latestOptions(args, "-le", "", latestEcho, false); ok {
+	if opts, ok := latestOptions(args, "-le", "", latestEcho, true); ok {
 		return opts
 	}
 	return cliOptions{recordArgv: args, openRecorded: len(args) > 0}
