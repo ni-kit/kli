@@ -107,11 +107,11 @@ func main() {
 		}
 
 		if opts.latestAction == latestExec {
-			argv := inv.RawArgv()
-			if err := historySvc.Record(service.Parse(argv)); err != nil {
+			rawArgv := inv.RawArgv()
+			if err := historySvc.Record(service.Parse(rawArgv)); err != nil {
 				fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 			}
-			execArgv(argv)
+			execArgv(inv.ExpandedArgv())
 		}
 
 		runApp(tui.NewAppOnDetail(*inv, invocations, historySvc), historySvc)

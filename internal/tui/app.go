@@ -16,16 +16,17 @@ const (
 )
 
 type App struct {
-	screen        screen
-	invocations   []domain.Invocation
-	historySvc    service.HistoryService
-	history       historyModel
-	detail        detailModel
-	width         int
-	height        int
-	histExecArgv  []string
-	initialSearch string
-	startOnDetail *domain.Invocation // non-nil → open detail screen immediately
+	screen         screen
+	invocations    []domain.Invocation
+	historySvc     service.HistoryService
+	history        historyModel
+	detail         detailModel
+	width          int
+	height         int
+	histExecArgv   []string
+	histRecordArgv []string
+	initialSearch  string
+	startOnDetail  *domain.Invocation // non-nil → open detail screen immediately
 }
 
 func NewApp(invocations []domain.Invocation, historySvc service.HistoryService) *App {
@@ -105,7 +106,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case msg.String() == "x":
 				inv := a.history.selectedInvocation()
 				if inv != nil {
-					a.histExecArgv = inv.RawArgv()
+					a.histExecArgv = inv.ExpandedArgv()
+					a.histRecordArgv = inv.RawArgv()
 					return a, tea.Quit
 				}
 				return a, nil
@@ -201,8 +203,8 @@ func (a *App) saveDetail() {
 
 // RecordArgv returns the unexpanded argv to save to history (env vars kept as-is).
 func (a *App) RecordArgv() []string {
-	if len(a.histExecArgv) > 0 {
-		return a.histExecArgv
+	if len(a.histRecordArgv) > 0 {
+		return a.histRecordArgv
 	}
 	return a.detail.rawArgv()
 }

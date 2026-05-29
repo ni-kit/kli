@@ -51,7 +51,7 @@ kli --import
 ## Installation
 
 ```sh 
-ask your llm how to
+go install github.com/ni-kit/kli/cmd/kli
 ```
 
 ## History browser
@@ -107,7 +107,7 @@ Opens when you press `enter` on a history entry. Shows command, args and flags a
 | `x` | Exec command |
 | `esc` | Back to history list |
 
-Env vars in values are expanded on exec and previewed inline (e.g. `$HOME` → `/Users/you`).
+Env vars and leading `~` in values are expanded on exec and previewed inline (e.g. `$HOME` or `~/src`).
 
 `m` and `M` reorganize how flags and values are split across rows — useful for clustering short flags (e.g. merging `-v` and `-x` into `-vx`) or splitting them apart.
 
@@ -117,4 +117,6 @@ Press `t` on any history entry to open the tag editor. Enter a comma-separated l
 
 ## TODO
 
+- [ ] support && and |
+- [ ] support stdout stderr redirects
 - [ ] capital X: capture stdout/stderr to files, show exit code in history

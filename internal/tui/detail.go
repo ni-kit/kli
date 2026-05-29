@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -570,11 +569,7 @@ func mergedTokens(rows []displayRow, secretsVisible bool) []string {
 }
 
 func (m detailModel) liveArgv() []string {
-	tokens := mergedTokens(m.rows, true)
-	for i, t := range tokens {
-		tokens[i] = os.ExpandEnv(t)
-	}
-	return append([]string{m.inv.Command}, tokens...)
+	return domain.ExpandExecArgv(m.rawArgv())
 }
 
 func (m detailModel) rawArgv() []string {
@@ -599,10 +594,10 @@ func (m detailModel) liveCommand() string {
 }
 
 func envHint(value string) string {
-	if !strings.Contains(value, "$") {
+	if !strings.Contains(value, "$") && !strings.HasPrefix(value, "~") {
 		return ""
 	}
-	expanded := os.ExpandEnv(value)
+	expanded := domain.ExpandExecArgv([]string{"_", value})[1]
 	if expanded == value {
 		return ""
 	}

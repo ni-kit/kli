@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -57,6 +58,47 @@ func (inv Invocation) RawArgv() []string {
 		argv = append(argv, arg.RawDisplay())
 	}
 	return argv
+}
+
+// ExpandExecArgv returns argv for execution with runtime-only expansions
+// applied. The original argv should still be used for history persistence.
+func ExpandExecArgv(argv []string) []string {
+	if len(argv) == 0 {
+		return nil
+	}
+
+	expanded := append([]string(nil), argv...)
+	expanded[0] = expandHomeTilde(expanded[0])
+	for i := 1; i < len(expanded); i++ {
+		expanded[i] = os.ExpandEnv(expandHomeTilde(expanded[i]))
+	}
+	return expanded
+}
+
+// ExpandedArgv returns argv for execution with environment variables expanded
+// and leading "~/" resolved to the current HOME directory.
+func (inv Invocation) ExpandedArgv() []string {
+	return ExpandExecArgv(inv.RawArgv())
+}
+
+func expandHomeTilde(token string) string {
+	if token != "~" && !strings.HasPrefix(token, "~/") {
+		return token
+	}
+
+	home := os.Getenv("HOME")
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil || home == "" {
+			return token
+		}
+	}
+
+	if token == "~" {
+		return home
+	}
+	return home + token[1:]
 }
 
 // expandShortFlag returns individual single-letter names for a short flag,
