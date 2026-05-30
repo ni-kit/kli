@@ -15,6 +15,8 @@ const (
 	screenDetail
 )
 
+const kliTitle = "  kli — command history manager"
+
 type App struct {
 	screen         screen
 	invocations    []domain.Invocation
@@ -193,18 +195,13 @@ func (a *App) ExecEnv() []string {
 
 func (a *App) saveDetail() {
 	orig := a.detail.OriginalInvocation()
-	currentCommand := a.detail.CurrentCommand()
-	currentEnv := a.detail.CurrentEnv()
-	currentArgs := a.detail.CurrentArgs()
-
-	candidate := domain.Invocation{Command: currentCommand, Env: currentEnv, Args: currentArgs, Runs: []domain.Run{orig.LastRun()}}
-	if candidate.CommandFingerprint() == orig.CommandFingerprint() {
-		// only layout changed (reordering) — mutate in place
-		_ = a.historySvc.SaveLayout(orig.ID, currentEnv, currentArgs)
-	} else {
-		// values/flags changed — record as a new entry
-		_ = a.historySvc.Record(candidate)
+	updated := domain.Invocation{
+		Command: a.detail.CurrentCommand(),
+		Env:     a.detail.CurrentEnv(),
+		Args:    a.detail.CurrentArgs(),
+		Runs:    []domain.Run{orig.LastRun()},
 	}
+	_ = a.historySvc.SaveEdited(orig, updated)
 
 	if invs, err := a.historySvc.All(); err == nil {
 		a.invocations = invs

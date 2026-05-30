@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
@@ -133,6 +134,7 @@ type historyModel struct {
 	searchInput    textinput.Model
 	tagInput       textinput.Model
 	pendingD       bool
+	cwd            string
 }
 
 func newHistoryModel(invocations []domain.Invocation, width, height int, initialSearch string) historyModel {
@@ -155,6 +157,7 @@ func newHistoryModel(invocations []domain.Invocation, width, height int, initial
 	ti.Placeholder = "tag name"
 	ti.CharLimit = 64
 
+	cwd, _ := os.Getwd()
 	buildTagColors(invocations)
 	m := historyModel{
 		allInvocations: invocations,
@@ -163,6 +166,7 @@ func newHistoryModel(invocations []domain.Invocation, width, height int, initial
 		height:         height,
 		searchInput:    si,
 		tagInput:       ti,
+		cwd:            cwd,
 	}
 	m.applyFilter()
 	return m
@@ -173,7 +177,7 @@ func (m *historyModel) applyFilter() {
 	if raw == "" {
 		m.filtered = m.allInvocations
 	} else {
-		q := domain.ParseQuery(raw)
+		q := domain.ParseQuery(raw, m.cwd)
 		m.filtered = q.Filter(m.allInvocations)
 		q.Sort(m.filtered)
 	}
@@ -301,7 +305,7 @@ func parseTags(raw string) []string {
 func (m historyModel) View() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("  kli — command history") + "\n")
+	b.WriteString(titleStyle.Render(kliTitle) + "\n")
 
 	switch m.mode {
 	case histModeSearch:

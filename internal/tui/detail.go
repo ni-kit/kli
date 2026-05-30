@@ -746,7 +746,7 @@ func envHint(value string, env []string) string {
 func (m detailModel) View() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("  kli — command history") + "\n")
+	b.WriteString(titleStyle.Render(kliTitle) + "\n")
 	maxW := m.width - 4
 	for _, l := range wrapText(m.liveCommand(), maxW) {
 		b.WriteString(headerStyle.Render("  "+l) + "\n")

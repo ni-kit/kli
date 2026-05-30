@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"os"
 	"slices"
 	"strings"
 )
@@ -17,7 +16,7 @@ type SearchQuery struct {
 	FreeText string   // everything left after prefixed tokens
 }
 
-func ParseQuery(input string) SearchQuery {
+func ParseQuery(input, cwd string) SearchQuery {
 	tokens := SplitShellLine(input)
 	var q SearchQuery
 	var free []string
@@ -31,7 +30,7 @@ func ParseQuery(input string) SearchQuery {
 		case hasPrefix(tok, "V:"):
 			q.Values = append(q.Values, tok[2:])
 		case hasPrefix(tok, "P:"):
-			q.Paths = append(q.Paths, normalizePathToken(tok[2:]))
+			q.Paths = append(q.Paths, normalizePathToken(tok[2:], cwd))
 		case hasPrefix(tok, "T:"):
 			q.Tags = append(q.Tags, tok[2:])
 		case hasPrefix(tok, "D:"):
@@ -167,15 +166,11 @@ func containsFold(s, sub string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(sub))
 }
 
-func normalizePathToken(path string) string {
-	if path != "." {
-		return path
+func normalizePathToken(path, cwd string) string {
+	if path == "." && cwd != "" {
+		return cwd
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return path
-	}
-	return cwd
+	return path
 }
 
 func SplitShellLine(line string) []string {

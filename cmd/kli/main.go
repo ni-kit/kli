@@ -85,7 +85,8 @@ func main() {
 	}
 
 	if opts.latestAction != latestNone {
-		inv, err := latestInvocation(invocations, opts.currentDir)
+		cwd, _ := os.Getwd()
+		inv, err := historySvc.Latest(cwd, opts.currentDir)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -182,37 +183,6 @@ func latestOptions(args []string, short, long string, action latestAction, confi
 		}
 	}
 	return cliOptions{}, false
-}
-
-func latestInvocation(invocations []domain.Invocation, currentDirOnly bool) (*domain.Invocation, error) {
-	if len(invocations) == 0 {
-		return nil, fmt.Errorf("kli: no history yet")
-	}
-	if !currentDirOnly {
-		return &invocations[0], nil
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("kli: cannot resolve current directory: %w", err)
-	}
-
-	var best *domain.Invocation
-	var bestRun domain.Run
-	for i := range invocations {
-		run, ok := invocations[i].LastRunInDir(cwd)
-		if !ok {
-			continue
-		}
-		if best == nil || run.RunAt.After(bestRun.RunAt) {
-			best = &invocations[i]
-			bestRun = run
-		}
-	}
-	if best == nil {
-		return nil, fmt.Errorf("kli: no history for current directory")
-	}
-	return best, nil
 }
 
 func confirmAction(inv *domain.Invocation, action latestAction) (bool, error) {
