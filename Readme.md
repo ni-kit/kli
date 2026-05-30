@@ -138,5 +138,4 @@ Redirect operators in shell history (`>file`, `>>file`, `2>&1`, `2>/dev/null`, e
 - [ ] support && and |
 - [ ] add step result preview (one liner builder)
 - [ ] add tldr support
-- [ ] autocomplete env vars
 - [ ] show exit code in history
