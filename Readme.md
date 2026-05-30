@@ -62,6 +62,7 @@ Navigate with `hjkl` or arrow keys.
 |-----|--------|
 | `enter` | Open command in detail/edit view |
 | `x` | Exec selected command immediately |
+| `a` | Create new command |
 | `/` | Search (see search syntax below) |
 | `t` | Edit tags (comma-separated list) |
 | `q` / `ctrl+c` | Quit |
@@ -98,12 +99,14 @@ Opens when you press `enter` on a history entry. Shows leading env vars, the com
 | `dd` | Delete row |
 | `space` | Toggle row (excluded from exec/copy) |
 | `s` | Toggle secret (value hidden in copy) |
+| `S` | Save changes without executing |
 | `y` | Copy cell to clipboard |
 | `Y` | Copy full command to clipboard |
 | `p` | Paste clipboard into cell |
 | `m` | Merge flag into previous row |
 | `M` | Push flag/value to next row |
 | `u` | Undo last edit |
+| `r` | Toggle stdout/stderr redirects |
 | `x` | Exec command |
 | `esc` | Back to history list |
 
@@ -115,10 +118,25 @@ Leading `KEY=value` env vars are stored with the command and set when executing 
 
 Press `t` on any history entry to open the tag editor. Enter a comma-separated list of tags and press `enter` to save. Clear the field and confirm to remove all tags. Same tag name always gets the same color across all entries.
 
+## Redirects
+
+Press `r` in the detail view to show the stdout and stderr redirect controls. Each stream has a carousel of targets — press `space` or `enter` to cycle:
+
+| Value | Meaning |
+|-------|---------|
+| `out` | Normal terminal stdout (default) |
+| `err` | Normal terminal stderr (default), or redirect this stream to the other |
+| `null` | Discard (`/dev/null`) |
+| `file` | Redirect to a file |
+
+When `file` is selected, press `i` or `enter` to type the path. Prefix with `>>` to append instead of overwrite (e.g. `>>app.log`). Exec is blocked until the path is filled in.
+
+Redirect operators in shell history (`>file`, `>>file`, `2>&1`, `2>/dev/null`, etc.) are recognised and parsed automatically on import.
+
 ## TODO
 
 - [ ] support && and |
 - [ ] add step result preview (one liner builder)
 - [ ] add tldr support
 - [ ] autocomplete env vars
-- [ ] capital X: capture stdout/stderr to files, show exit code in history
+- [ ] show exit code in history
