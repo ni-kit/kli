@@ -279,6 +279,7 @@ type savedMsg struct{}
 type detailModel struct {
 	inv              domain.Invocation
 	width            int
+	height           int
 	rows             []displayRow   // current chain segment's rows
 	chainIdx         int            // index of currently edited chain segment
 	segRows          [][]displayRow // rows for all chain segments; segRows[chainIdx] may be stale
@@ -364,7 +365,7 @@ func (m *detailModel) normalizeCursor() {
 	}
 }
 
-func newDetailModel(inv domain.Invocation, width int) detailModel {
+func newDetailModel(inv domain.Invocation, width, height int) detailModel {
 	ti := textinput.New()
 	ti.CharLimit = 256
 
@@ -389,12 +390,18 @@ func newDetailModel(inv domain.Invocation, width int) detailModel {
 	return detailModel{
 		inv:              inv,
 		width:            width,
+		height:           height,
 		rows:             segRows[0],
 		chainIdx:         0,
 		segRows:          segRows,
 		input:            ti,
 		redirectsVisible: redirectsVisible,
 	}
+}
+
+func (m *detailModel) setSize(w, h int) {
+	m.width = w
+	m.height = h
 }
 
 // switchToChain saves the current segment's rows and loads the target segment.
@@ -1403,7 +1410,7 @@ func (m detailModel) View() string {
 	if m.redirectsVisible {
 		b.WriteString(fmt.Sprintf("  %s  %s\n",
 			cellHeader.Render(padStr("stream", colNameW)),
-			cellHeader.Render(padStr("redirect to", colValueW)),
+			cellHeader.Render(padStr("redirect to (hit space to circle)", colValueW)),
 		))
 		b.WriteString("  " + sectionStyle.Render(strings.Repeat("─", colNameW+colValueW+4)) + "\n")
 		for r, dr := range m.rows {
@@ -1428,6 +1435,21 @@ func (m detailModel) View() string {
 		}
 	}
 
+	help := m.helpBar()
+	if m.height > 0 {
+		contentLines := renderedLines(b.String())
+		helpLines := renderedLines(help)
+		for i := 0; i < m.height-contentLines-helpLines; i++ {
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString(help)
+
+	return b.String()
+}
+
+func (m detailModel) helpBar() string {
+	var b strings.Builder
 	b.WriteString("\n")
 	if m.mode == modeEditing {
 		b.WriteString(hintStyle.Render("  enter: confirm  •  esc: cancel") + "\n")
@@ -1444,8 +1466,14 @@ func (m detailModel) View() string {
 	} else {
 		b.WriteString(hintStyle.Render("  hjkl: navigate  •  i: edit  •  a: add row  •  dd: delete  •  m/M: move flag  •  S: save  •  x: exec  •  r: redirects  •  ?: more") + "\n")
 	}
-
 	return b.String()
+}
+
+func renderedLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return lipgloss.Height(strings.TrimSuffix(s, "\n"))
 }
 
 func (m detailModel) renderRedirectRow(r int, dr displayRow) string {

@@ -55,7 +55,7 @@ func NewAppOnDetail(inv domain.Invocation, invocations []domain.Invocation, hist
 func (a *App) Init() tea.Cmd {
 	a.history = newHistoryModel(a.invocations, a.width, a.height, a.initialSearch)
 	if a.startOnDetail != nil {
-		a.detail = newDetailModel(*a.startOnDetail, a.width)
+		a.detail = newDetailModel(*a.startOnDetail, a.width, a.height)
 	}
 	return nil
 }
@@ -66,6 +66,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width = msg.Width
 		a.height = msg.Height
 		a.history.setSize(msg.Width, msg.Height)
+		a.detail.setSize(msg.Width, msg.Height)
 		return a, nil
 
 	case setTagsInvMsg:
@@ -100,7 +101,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, appKeys.Enter):
 				inv := a.history.selectedInvocation()
 				if inv != nil {
-					a.detail = newDetailModel(*inv, a.width)
+					a.detail = newDetailModel(*inv, a.width, a.height)
 					a.screen = screenDetail
 				}
 				return a, nil
@@ -112,7 +113,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return a, nil
 			case msg.String() == "a":
-				detail, cmd := newDetailModel(service.NewBlankInvocation(), a.width).WithCommandEditing()
+				detail, cmd := newDetailModel(service.NewBlankInvocation(), a.width, a.height).WithCommandEditing()
 				a.detail = detail
 				a.screen = screenDetail
 				return a, cmd
