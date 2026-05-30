@@ -86,7 +86,7 @@ Press `/` to open the search bar. Filters are ANDed. Free text matches anywhere 
 
 ## Detail / edit view
 
-Opens when you press `enter` on a history entry. Shows leading env vars, args and flags as editable tables.
+Opens when you press `enter` on a history entry. Shows leading env vars, the command, args and flags as editable fields.
 
 | Key | Action |
 |-----|--------|

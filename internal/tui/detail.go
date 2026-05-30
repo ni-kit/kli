@@ -71,6 +71,7 @@ type displayRowKind int
 const (
 	rowArg displayRowKind = iota
 	rowEnv
+	rowCommand
 )
 
 type detailMode int
@@ -120,6 +121,10 @@ func buildEnvRows(env []domain.EnvVar) []displayRow {
 		rows = append(rows, displayRow{kind: rowEnv})
 	}
 	return rows
+}
+
+func buildCommandRow(command string) displayRow {
+	return displayRow{kind: rowCommand, name: "command", value: command}
 }
 
 func buildRows(args []domain.Arg) []displayRow {
@@ -186,6 +191,15 @@ func rowsToEnv(rows []displayRow) []domain.EnvVar {
 	return env
 }
 
+func rowsCommand(rows []displayRow, fallback string) string {
+	for _, dr := range rows {
+		if dr.kind == rowCommand {
+			return dr.value
+		}
+	}
+	return fallback
+}
+
 func hasEnvRow(rows []displayRow) bool {
 	for _, dr := range rows {
 		if dr.kind == rowEnv {
@@ -193,6 +207,25 @@ func hasEnvRow(rows []displayRow) bool {
 		}
 	}
 	return false
+}
+
+func hasCommandRow(rows []displayRow) bool {
+	for _, dr := range rows {
+		if dr.kind == rowCommand {
+			return true
+		}
+	}
+	return false
+}
+
+func countEnvRows(rows []displayRow) int {
+	n := 0
+	for _, dr := range rows {
+		if dr.kind == rowEnv {
+			n++
+		}
+	}
+	return n
 }
 
 func flagLabel(a domain.Arg) string {
@@ -238,9 +271,20 @@ func (m detailModel) ExecArgv() []string                    { return m.liveArgv(
 func (m detailModel) ExecEnv() []string                     { return m.liveEnv() }
 func (m detailModel) InvocationID() string                  { return m.inv.ID }
 func (m detailModel) OriginalInvocation() domain.Invocation { return m.inv }
+func (m detailModel) CurrentCommand() string                { return rowsCommand(m.rows, m.inv.Command) }
 func (m detailModel) CurrentEnv() []domain.EnvVar           { return rowsToEnv(m.rows) }
 func (m detailModel) CurrentArgs() []domain.Arg             { return rowsToArgs(m.rows) }
 func (m detailModel) onButton() bool                        { return m.row == len(m.rows) }
+
+func (m detailModel) onCommandRow() bool {
+	return !m.onButton() && m.rows[m.row].kind == rowCommand
+}
+
+func (m *detailModel) normalizeCursor() {
+	if m.onCommandRow() {
+		m.col = 1
+	}
+}
 
 func newDetailModel(inv domain.Invocation, width int) detailModel {
 	ti := textinput.New()
@@ -248,7 +292,7 @@ func newDetailModel(inv domain.Invocation, width int) detailModel {
 	return detailModel{
 		inv:   inv,
 		width: width,
-		rows:  append(buildEnvRows(inv.Env), buildRows(inv.Args)...),
+		rows:  append(append(buildEnvRows(inv.Env), buildCommandRow(inv.Command)), buildRows(inv.Args)...),
 		input: ti,
 	}
 }
@@ -288,7 +332,7 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 	}
 	if m.dArmed {
 		m.dArmed = false
-		if key.Matches(msg, detailKeys.D) && !m.onButton() && len(m.rows) > 0 {
+		if key.Matches(msg, detailKeys.D) && !m.onButton() && !m.onCommandRow() && len(m.rows) > 0 {
 			snapshot := make([]displayRow, len(m.rows))
 			copy(snapshot, m.rows)
 			m.undo = &undoEntry{rows: snapshot, rowPos: m.row}
@@ -297,9 +341,15 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 				m.rows = append([]displayRow{{kind: rowEnv}}, m.rows...)
 				m.row = 0
 			}
+			if !hasCommandRow(m.rows) {
+				insertAt := min(len(m.rows), countEnvRows(m.rows))
+				m.rows = append(m.rows[:insertAt], append([]displayRow{buildCommandRow(m.inv.Command)}, m.rows[insertAt:]...)...)
+				m.row = insertAt
+			}
 			if m.row >= len(m.rows) && m.row > 0 {
 				m.row--
 			}
+			m.normalizeCursor()
 			return m, nil
 		}
 	}
@@ -309,16 +359,18 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		if m.row > 0 {
 			m.row--
 		}
+		m.normalizeCursor()
 	case key.Matches(msg, detailKeys.Down):
 		if m.row < len(m.rows) {
 			m.row++
 		}
+		m.normalizeCursor()
 	case key.Matches(msg, detailKeys.Left):
-		if !m.onButton() && m.col > 0 {
+		if !m.onButton() && !m.onCommandRow() && m.col > 0 {
 			m.col--
 		}
 	case key.Matches(msg, detailKeys.Right):
-		if !m.onButton() && m.col < numCols-1 {
+		if !m.onButton() && !m.onCommandRow() && m.col < numCols-1 {
 			m.col++
 		}
 	case key.Matches(msg, detailKeys.Enter):
@@ -339,11 +391,11 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			m.cArmed = true
 		}
 	case key.Matches(msg, detailKeys.ToggleRow):
-		if !m.onButton() {
+		if !m.onButton() && !m.onCommandRow() {
 			m.rows[m.row].disabled = !m.rows[m.row].disabled
 		}
 	case key.Matches(msg, detailKeys.ToggleValue):
-		if !m.onButton() {
+		if !m.onButton() && !m.onCommandRow() {
 			m.rows[m.row].secret = !m.rows[m.row].secret
 		}
 	case key.Matches(msg, detailKeys.Save):
@@ -373,11 +425,11 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			}
 		}
 	case key.Matches(msg, detailKeys.D):
-		if !m.onButton() {
+		if !m.onButton() && !m.onCommandRow() {
 			m.dArmed = true
 		}
 	case key.Matches(msg, detailKeys.AddRow):
-		if !m.onButton() {
+		if !m.onButton() && !m.onCommandRow() {
 			snapshot := make([]displayRow, len(m.rows))
 			copy(snapshot, m.rows)
 			insertAt := m.row + 1
@@ -389,6 +441,7 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			m.rows = newRows
 			m.row = insertAt
 			m.col = 0
+			m.normalizeCursor()
 			return m.startEditing("")
 		}
 	case key.Matches(msg, detailKeys.Help):
@@ -406,6 +459,7 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 				}
 				m.row, m.col = m.undo.row, m.undo.col
 			}
+			m.normalizeCursor()
 			m.undo = nil
 		}
 	}
@@ -413,6 +467,9 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 }
 
 func (m detailModel) currentCell() string {
+	if m.onCommandRow() {
+		return m.rows[m.row].value
+	}
 	if m.col == 0 {
 		return m.rows[m.row].name
 	}
@@ -420,6 +477,10 @@ func (m detailModel) currentCell() string {
 }
 
 func (m *detailModel) setCell(s string) {
+	if m.onCommandRow() {
+		m.rows[m.row].value = s
+		return
+	}
 	if m.col == 0 {
 		m.rows[m.row].name = s
 	} else {
@@ -428,6 +489,7 @@ func (m *detailModel) setCell(s string) {
 }
 
 func (m detailModel) startEditing(initial string) (detailModel, tea.Cmd) {
+	m.normalizeCursor()
 	m.mode = modeEditing
 	m.input.SetValue(initial)
 	cmd := m.input.Focus()
@@ -646,7 +708,7 @@ func (m detailModel) liveEnv() []string {
 }
 
 func (m detailModel) rawArgv() []string {
-	return append([]string{m.inv.Command}, mergedTokens(m.rows, true)...)
+	return append([]string{m.CurrentCommand()}, mergedTokens(m.rows, true)...)
 }
 
 func (m detailModel) rawCommandTokens() []string {
@@ -654,7 +716,7 @@ func (m detailModel) rawCommandTokens() []string {
 }
 
 func (m detailModel) copyCommand() string {
-	return strings.Join(append(envTokens(m.rows, false), append([]string{m.inv.Command}, mergedTokens(m.rows, false)...)...), " ")
+	return strings.Join(append(envTokens(m.rows, false), append([]string{m.CurrentCommand()}, mergedTokens(m.rows, false)...)...), " ")
 }
 
 func (m detailModel) liveCommand() string {
@@ -667,7 +729,7 @@ func (m detailModel) liveCommand() string {
 			rows[m.row].value = m.input.Value()
 		}
 	}
-	return strings.Join(append(envTokens(rows, true), append([]string{m.inv.Command}, mergedTokens(rows, true)...)...), " ")
+	return strings.Join(append(envTokens(rows, true), append([]string{rowsCommand(rows, m.inv.Command)}, mergedTokens(rows, true)...)...), " ")
 }
 
 func envHint(value string, env []string) string {
@@ -703,6 +765,15 @@ func (m detailModel) View() string {
 			continue
 		}
 		b.WriteString(m.renderRow(r, dr, env) + "\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(sectionStyle.Render("  Command") + "\n")
+	for r, dr := range m.rows {
+		if dr.kind != rowCommand {
+			continue
+		}
+		b.WriteString(m.renderCommandRow(r, dr) + "\n")
 	}
 
 	b.WriteString("\n")
@@ -821,6 +892,29 @@ func (m detailModel) renderRow(r int, dr displayRow, env []string) string {
 	}
 
 	line := fmt.Sprintf("  %s  %s", nameCell, valCell)
+	if isActive {
+		line = rowActiveStyle.Render(line)
+	}
+	return line
+}
+
+func (m detailModel) renderCommandRow(r int, dr displayRow) string {
+	isActive := r == m.row && !m.onButton()
+	width := colNameW + colValueW + 2
+
+	var text string
+	if isActive && m.mode == modeEditing {
+		text = m.input.View()
+	} else {
+		text = padStr(dr.value, width)
+	}
+
+	cell := cellValue.Render(text)
+	if isActive {
+		cell = cellSelected.Render(text)
+	}
+
+	line := "  " + cell
 	if isActive {
 		line = rowActiveStyle.Render(line)
 	}

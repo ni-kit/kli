@@ -193,10 +193,11 @@ func (a *App) ExecEnv() []string {
 
 func (a *App) saveDetail() {
 	orig := a.detail.OriginalInvocation()
+	currentCommand := a.detail.CurrentCommand()
 	currentEnv := a.detail.CurrentEnv()
 	currentArgs := a.detail.CurrentArgs()
 
-	candidate := domain.Invocation{Command: orig.Command, Env: currentEnv, Args: currentArgs, Runs: []domain.Run{orig.LastRun()}}
+	candidate := domain.Invocation{Command: currentCommand, Env: currentEnv, Args: currentArgs, Runs: []domain.Run{orig.LastRun()}}
 	if candidate.CommandFingerprint() == orig.CommandFingerprint() {
 		// only layout changed (reordering) — mutate in place
 		_ = a.historySvc.SaveLayout(orig.ID, currentEnv, currentArgs)
