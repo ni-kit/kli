@@ -30,6 +30,17 @@ type Arg struct {
 	Redacted bool
 }
 
+func (e EnvVar) Display() string {
+	if e.Redacted {
+		return e.Key + "=••••"
+	}
+	return e.RawDisplay()
+}
+
+func (e EnvVar) RawDisplay() string {
+	return e.Key + "=" + e.Value
+}
+
 func (a Arg) Display() string {
 	switch a.Kind {
 	case ArgShortFlag:

@@ -35,7 +35,7 @@ func (i invItem) Description() string {
 }
 
 func (i invItem) FilterValue() string {
-	return i.inv.Command + " " + i.inv.ArgsPreview()
+	return i.inv.FullCommand()
 }
 
 var (

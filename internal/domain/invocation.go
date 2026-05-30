@@ -15,9 +15,16 @@ type Run struct {
 type Invocation struct {
 	ID      string
 	Command string
+	Env     []EnvVar
 	Args    []Arg
 	Runs    []Run // newest-first
 	Tags    []string
+}
+
+type EnvVar struct {
+	Key      string
+	Value    string
+	Redacted bool
 }
 
 func (inv Invocation) LastRun() Run {
@@ -48,7 +55,15 @@ func (inv Invocation) ArgsPreview() string {
 }
 
 func (inv Invocation) FullCommand() string {
-	return inv.Command + " " + inv.ArgsString()
+	parts := make([]string, 0, len(inv.Env)+1+len(inv.Args))
+	for _, e := range inv.Env {
+		parts = append(parts, e.Display())
+	}
+	parts = append(parts, inv.Command)
+	for _, a := range inv.Args {
+		parts = append(parts, a.Display())
+	}
+	return strings.Join(parts, " ")
 }
 
 func (inv Invocation) RawArgv() []string {
@@ -60,17 +75,42 @@ func (inv Invocation) RawArgv() []string {
 	return argv
 }
 
+func (inv Invocation) RawEnv() []string {
+	env := make([]string, 0, len(inv.Env))
+	for _, e := range inv.Env {
+		if e.Key == "" {
+			continue
+		}
+		env = append(env, e.RawDisplay())
+	}
+	return env
+}
+
+func (inv Invocation) RawCommandTokens() []string {
+	tokens := make([]string, 0, len(inv.Env)+1+len(inv.Args))
+	tokens = append(tokens, inv.RawEnv()...)
+	tokens = append(tokens, inv.RawArgv()...)
+	return tokens
+}
+
 // ExpandExecArgv returns argv for execution with runtime-only expansions
 // applied. The original argv should still be used for history persistence.
 func ExpandExecArgv(argv []string) []string {
+	return ExpandExecArgvWithEnv(argv, nil)
+}
+
+// ExpandExecArgvWithEnv returns argv for execution with runtime-only expansions
+// applied, using env assignments as overrides when expanding argument values.
+func ExpandExecArgvWithEnv(argv []string, env []string) []string {
 	if len(argv) == 0 {
 		return nil
 	}
 
 	expanded := append([]string(nil), argv...)
+	lookup := envLookup(env)
 	expanded[0] = expandHomeTilde(expanded[0])
 	for i := 1; i < len(expanded); i++ {
-		expanded[i] = os.ExpandEnv(expandHomeTilde(expanded[i]))
+		expanded[i] = os.Expand(expandHomeTilde(expanded[i]), lookup)
 	}
 	return expanded
 }
@@ -78,7 +118,41 @@ func ExpandExecArgv(argv []string) []string {
 // ExpandedArgv returns argv for execution with environment variables expanded
 // and leading "~/" resolved to the current HOME directory.
 func (inv Invocation) ExpandedArgv() []string {
-	return ExpandExecArgv(inv.RawArgv())
+	return ExpandExecArgvWithEnv(inv.RawArgv(), inv.ExpandedEnv())
+}
+
+func (inv Invocation) ExpandedEnv() []string {
+	return ExpandEnvAssignments(inv.RawEnv())
+}
+
+func ExpandEnvAssignments(env []string) []string {
+	expanded := make([]string, 0, len(env))
+	lookup := envLookup(env)
+	for _, item := range env {
+		key, value, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		expandedValue := os.Expand(expandHomeTilde(value), lookup)
+		expanded = append(expanded, key+"="+expandedValue)
+	}
+	return expanded
+}
+
+func envLookup(env []string) func(string) string {
+	overrides := map[string]string{}
+	for _, item := range env {
+		key, value, ok := strings.Cut(item, "=")
+		if ok {
+			overrides[key] = value
+		}
+	}
+	return func(key string) string {
+		if value, ok := overrides[key]; ok {
+			return value
+		}
+		return os.Getenv(key)
+	}
 }
 
 func expandHomeTilde(token string) string {
@@ -116,7 +190,13 @@ func expandShortFlag(a Arg) []string {
 
 func (inv Invocation) CommandFingerprint() string {
 	var flags []string
+	var env []string
 	var positionals []string
+	for _, e := range inv.Env {
+		if e.Key != "" {
+			env = append(env, e.RawDisplay())
+		}
+	}
 	for _, a := range inv.Args {
 		switch a.Kind {
 		case ArgShortFlag:
@@ -129,8 +209,9 @@ func (inv Invocation) CommandFingerprint() string {
 			positionals = append(positionals, a.Value)
 		}
 	}
+	slices.Sort(env)
 	slices.Sort(flags)
-	return inv.Command + "|" + strings.Join(flags, ",") + "|" + strings.Join(positionals, ",")
+	return strings.Join(env, ",") + "|" + inv.Command + "|" + strings.Join(flags, ",") + "|" + strings.Join(positionals, ",")
 }
 
 func (inv Invocation) FlagSetFingerprint() string {

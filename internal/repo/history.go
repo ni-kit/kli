@@ -64,6 +64,7 @@ func (r *jsonHistoryRepo) Append(inv domain.Invocation) error {
 	for i := range existing {
 		if existing[i].CommandFingerprint() == fp {
 			existing[i].AddRun(newRun)
+			existing[i].Env = inv.Env
 			existing[i].Args = inv.Args
 			found = true
 			break
@@ -104,6 +105,7 @@ func (r *jsonHistoryRepo) BulkAppend(incoming []domain.Invocation) error {
 		fp := inv.CommandFingerprint()
 		if idx, ok := index[fp]; ok {
 			existing[idx].AddRun(inv.Runs[0])
+			existing[idx].Env = inv.Env
 			existing[idx].Args = inv.Args
 		} else {
 			index[fp] = len(existing)
@@ -140,6 +142,7 @@ func dedup(invs []domain.Invocation) []domain.Invocation {
 		if idx, ok := seen[fp]; ok {
 			result[idx].Runs = append(result[idx].Runs, inv.Runs...)
 			if len(inv.Runs) > 0 && (len(result[idx].Runs) == 0 || inv.Runs[0].RunAt.After(result[idx].Runs[0].RunAt)) {
+				result[idx].Env = inv.Env
 				result[idx].Args = inv.Args
 			}
 		} else {

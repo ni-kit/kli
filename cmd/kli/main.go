@@ -58,10 +58,11 @@ func main() {
 	}
 
 	if len(opts.execArgv) > 0 {
-		if err := historySvc.Record(service.Parse(opts.execArgv)); err != nil {
+		inv := service.Parse(opts.execArgv)
+		if err := historySvc.Record(inv); err != nil {
 			fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 		}
-		execArgv(opts.execArgv)
+		execArgv(inv.ExpandedArgv(), inv.ExpandedEnv())
 	}
 
 	if len(opts.recordArgv) > 0 {
@@ -91,7 +92,7 @@ func main() {
 		}
 
 		if opts.latestAction == latestEcho {
-			fmt.Println(strings.Join(inv.RawArgv(), " "))
+			fmt.Println(strings.Join(inv.RawCommandTokens(), " "))
 			return
 		}
 
@@ -107,11 +108,11 @@ func main() {
 		}
 
 		if opts.latestAction == latestExec {
-			rawArgv := inv.RawArgv()
-			if err := historySvc.Record(service.Parse(rawArgv)); err != nil {
+			rawTokens := inv.RawCommandTokens()
+			if err := historySvc.Record(service.Parse(rawTokens)); err != nil {
 				fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 			}
-			execArgv(inv.ExpandedArgv())
+			execArgv(inv.ExpandedArgv(), inv.ExpandedEnv())
 		}
 
 		runApp(tui.NewAppOnDetail(*inv, invocations, historySvc), historySvc)
@@ -215,7 +216,7 @@ func latestInvocation(invocations []domain.Invocation, currentDirOnly bool) (*do
 }
 
 func confirmAction(inv *domain.Invocation, action latestAction) (bool, error) {
-	fmt.Println("$", strings.Join(inv.RawArgv(), " "))
+	fmt.Println("$", strings.Join(inv.RawCommandTokens(), " "))
 	prompt := "Open in TUI? [y/N]: "
 	if action == latestExec {
 		prompt = "Execute? [y/N]: "
@@ -239,24 +240,25 @@ func runApp(app *tui.App, historySvc service.HistoryService) {
 
 	if app.ExecRequested() {
 		argv := app.ExecArgv()
+		env := app.ExecEnv()
 		executed := service.Parse(app.RecordArgv())
 		if err := historySvc.Record(executed); err != nil {
 			fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 		}
 
-		execArgv(argv)
+		execArgv(argv, env)
 	}
 }
 
-func execArgv(argv []string) {
-	fmt.Println("$", strings.Join(argv, " "))
+func execArgv(argv []string, env []string) {
+	fmt.Println("$", strings.Join(append(env, argv...), " "))
 
 	bin, err := exec.LookPath(argv[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "kli: command not found:", argv[0])
 		os.Exit(1)
 	}
-	if err := syscall.Exec(bin, argv, os.Environ()); err != nil {
+	if err := syscall.Exec(bin, argv, append(os.Environ(), env...)); err != nil {
 		fmt.Fprintln(os.Stderr, "kli: exec failed:", err)
 		os.Exit(1)
 	}

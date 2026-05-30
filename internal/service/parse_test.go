@@ -12,12 +12,30 @@ func TestParse(t *testing.T) {
 		name  string
 		value string
 	}
+	type wantEnv struct {
+		key   string
+		value string
+	}
 	tests := []struct {
 		name    string
 		argv    []string
 		command string
+		env     []wantEnv
 		args    []wantArg
 	}{
+		{
+			name:    "leading env vars",
+			argv:    []string{"TELEGRAM_TOKEN=some", "JWT_SECRET=another", "go", "test", "./..."},
+			command: "go",
+			env: []wantEnv{
+				{"TELEGRAM_TOKEN", "some"},
+				{"JWT_SECRET", "another"},
+			},
+			args: []wantArg{
+				{domain.ArgPositional, "", "test"},
+				{domain.ArgPositional, "", "./..."},
+			},
+		},
 		{
 			name:    "short flag cluster",
 			argv:    []string{"git", "commit", "-am", "initial commit"},
@@ -67,6 +85,15 @@ func TestParse(t *testing.T) {
 			inv := Parse(tc.argv)
 			if inv.Command != tc.command {
 				t.Fatalf("command: got %q, want %q", inv.Command, tc.command)
+			}
+			if len(inv.Env) != len(tc.env) {
+				t.Fatalf("env len: got %d, want %d — env: %+v", len(inv.Env), len(tc.env), inv.Env)
+			}
+			for i, w := range tc.env {
+				got := inv.Env[i]
+				if got.Key != w.key || got.Value != w.value {
+					t.Errorf("env[%d]: got {%q %q}, want {%q %q}", i, got.Key, got.Value, w.key, w.value)
+				}
 			}
 			if len(inv.Args) != len(tc.args) {
 				t.Fatalf("args len: got %d, want %d — args: %+v", len(inv.Args), len(tc.args), inv.Args)

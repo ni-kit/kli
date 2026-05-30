@@ -24,6 +24,7 @@ type App struct {
 	width          int
 	height         int
 	histExecArgv   []string
+	histExecEnv    []string
 	histRecordArgv []string
 	initialSearch  string
 	startOnDetail  *domain.Invocation // non-nil → open detail screen immediately
@@ -107,7 +108,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				inv := a.history.selectedInvocation()
 				if inv != nil {
 					a.histExecArgv = inv.ExpandedArgv()
-					a.histRecordArgv = inv.RawArgv()
+					a.histExecEnv = inv.ExpandedEnv()
+					a.histRecordArgv = inv.RawCommandTokens()
 					return a, tea.Quit
 				}
 				return a, nil
@@ -182,14 +184,22 @@ func (a *App) ExecArgv() []string {
 	return a.detail.ExecArgv()
 }
 
+func (a *App) ExecEnv() []string {
+	if len(a.histExecArgv) > 0 {
+		return a.histExecEnv
+	}
+	return a.detail.ExecEnv()
+}
+
 func (a *App) saveDetail() {
 	orig := a.detail.OriginalInvocation()
+	currentEnv := a.detail.CurrentEnv()
 	currentArgs := a.detail.CurrentArgs()
 
-	candidate := domain.Invocation{Command: orig.Command, Args: currentArgs}
+	candidate := domain.Invocation{Command: orig.Command, Env: currentEnv, Args: currentArgs, Runs: []domain.Run{orig.LastRun()}}
 	if candidate.CommandFingerprint() == orig.CommandFingerprint() {
 		// only layout changed (reordering) — mutate in place
-		_ = a.historySvc.SaveLayout(orig.ID, currentArgs)
+		_ = a.historySvc.SaveLayout(orig.ID, currentEnv, currentArgs)
 	} else {
 		// values/flags changed — record as a new entry
 		_ = a.historySvc.Record(candidate)
@@ -206,5 +216,5 @@ func (a *App) RecordArgv() []string {
 	if len(a.histRecordArgv) > 0 {
 		return a.histRecordArgv
 	}
-	return a.detail.rawArgv()
+	return a.detail.rawCommandTokens()
 }

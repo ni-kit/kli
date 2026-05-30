@@ -86,7 +86,7 @@ Press `/` to open the search bar. Filters are ANDed. Free text matches anywhere 
 
 ## Detail / edit view
 
-Opens when you press `enter` on a history entry. Shows command, args and flags as an editable table.
+Opens when you press `enter` on a history entry. Shows leading env vars, args and flags as editable tables.
 
 | Key | Action |
 |-----|--------|
@@ -107,7 +107,7 @@ Opens when you press `enter` on a history entry. Shows command, args and flags a
 | `x` | Exec command |
 | `esc` | Back to history list |
 
-Env vars and leading `~` in values are expanded on exec and previewed inline (e.g. `$HOME` or `~/src`).
+Leading `KEY=value` env vars are stored with the command and set when executing it. Env vars and leading `~` in values are expanded on exec and previewed inline (e.g. `$HOME` or `~/src`).
 
 `m` and `M` reorganize how flags and values are split across rows — useful for clustering short flags (e.g. merging `-v` and `-x` into `-vx`) or splitting them apart.
 

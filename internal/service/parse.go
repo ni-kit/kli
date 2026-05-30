@@ -15,9 +15,11 @@ func Parse(argv []string) domain.Invocation {
 }
 
 func parseWithTime(argv []string, t time.Time, cwd string) domain.Invocation {
+	env, argv := splitLeadingEnv(argv)
 	inv := domain.Invocation{
 		ID:      newID(),
 		Command: argv[0],
+		Env:     env,
 		Runs:    []domain.Run{{RunAt: t, Cwd: cwd}},
 	}
 
@@ -52,6 +54,33 @@ func parseWithTime(argv []string, t time.Time, cwd string) domain.Invocation {
 		}
 	}
 	return inv
+}
+
+func splitLeadingEnv(argv []string) ([]domain.EnvVar, []string) {
+	var env []domain.EnvVar
+	for len(argv) > 1 {
+		key, value, ok := strings.Cut(argv[0], "=")
+		if !ok || key == "" || !isEnvKey(key) {
+			break
+		}
+		env = append(env, domain.EnvVar{Key: key, Value: value})
+		argv = argv[1:]
+	}
+	return env, argv
+}
+
+func isEnvKey(s string) bool {
+	for i, r := range s {
+		switch {
+		case r == '_':
+		case r >= 'A' && r <= 'Z':
+		case r >= 'a' && r <= 'z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func newID() string {

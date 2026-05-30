@@ -28,6 +28,9 @@ var (
 	cellSelected   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("33"))
 	cellName       = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
 	cellValue      = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	cellEnvName    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	cellEnvValue   = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
+	cellEnvEmpty   = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
 	cellDisabled   = lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Strikethrough(true)
 	disabledMark   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
 	cellEnvHint    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
@@ -63,6 +66,13 @@ var (
 
 const numCols = 2
 
+type displayRowKind int
+
+const (
+	rowArg displayRowKind = iota
+	rowEnv
+)
+
 type detailMode int
 
 const (
@@ -94,10 +104,22 @@ type detailKeyMap struct {
 }
 
 type displayRow struct {
+	kind     displayRowKind
 	name     string
 	value    string
 	disabled bool // excluded from exec and copy
 	secret   bool // value passed to exec but shown as •••• in copy
+}
+
+func buildEnvRows(env []domain.EnvVar) []displayRow {
+	rows := make([]displayRow, 0, max(1, len(env)))
+	for _, e := range env {
+		rows = append(rows, displayRow{kind: rowEnv, name: e.Key, value: e.Value, secret: e.Redacted})
+	}
+	if len(rows) == 0 {
+		rows = append(rows, displayRow{kind: rowEnv})
+	}
+	return rows
 }
 
 func buildRows(args []domain.Arg) []displayRow {
@@ -116,11 +138,11 @@ func buildRows(args []domain.Arg) []displayRow {
 					secret = true
 				}
 			}
-			rows = append(rows, displayRow{name: name, value: value, secret: secret})
+			rows = append(rows, displayRow{kind: rowArg, name: name, value: value, secret: secret})
 		case domain.ArgPositional:
-			rows = append(rows, displayRow{name: "", value: a.Value, secret: a.Redacted})
+			rows = append(rows, displayRow{kind: rowArg, name: "", value: a.Value, secret: a.Redacted})
 		case domain.ArgFlagValue:
-			rows = append(rows, displayRow{name: "", value: a.Value, secret: a.Redacted})
+			rows = append(rows, displayRow{kind: rowArg, name: "", value: a.Value, secret: a.Redacted})
 		}
 	}
 	return rows
@@ -129,6 +151,9 @@ func buildRows(args []domain.Arg) []displayRow {
 func rowsToArgs(rows []displayRow) []domain.Arg {
 	args := make([]domain.Arg, 0, len(rows)*2)
 	for _, dr := range rows {
+		if dr.kind != rowArg {
+			continue
+		}
 		if dr.name == "" {
 			if dr.value != "" {
 				args = append(args, domain.Arg{Kind: domain.ArgPositional, Value: dr.value, Redacted: dr.secret})
@@ -148,6 +173,26 @@ func rowsToArgs(rows []displayRow) []domain.Arg {
 		}
 	}
 	return args
+}
+
+func rowsToEnv(rows []displayRow) []domain.EnvVar {
+	env := make([]domain.EnvVar, 0, len(rows))
+	for _, dr := range rows {
+		if dr.kind != rowEnv || dr.disabled || dr.name == "" {
+			continue
+		}
+		env = append(env, domain.EnvVar{Key: dr.name, Value: dr.value, Redacted: dr.secret})
+	}
+	return env
+}
+
+func hasEnvRow(rows []displayRow) bool {
+	for _, dr := range rows {
+		if dr.kind == rowEnv {
+			return true
+		}
+	}
+	return false
 }
 
 func flagLabel(a domain.Arg) string {
@@ -190,8 +235,10 @@ type detailModel struct {
 func (m detailModel) ExecRequested() bool                   { return m.execRequested }
 func (m detailModel) SaveRequested() bool                   { return m.saved }
 func (m detailModel) ExecArgv() []string                    { return m.liveArgv() }
+func (m detailModel) ExecEnv() []string                     { return m.liveEnv() }
 func (m detailModel) InvocationID() string                  { return m.inv.ID }
 func (m detailModel) OriginalInvocation() domain.Invocation { return m.inv }
+func (m detailModel) CurrentEnv() []domain.EnvVar           { return rowsToEnv(m.rows) }
 func (m detailModel) CurrentArgs() []domain.Arg             { return rowsToArgs(m.rows) }
 func (m detailModel) onButton() bool                        { return m.row == len(m.rows) }
 
@@ -201,7 +248,7 @@ func newDetailModel(inv domain.Invocation, width int) detailModel {
 	return detailModel{
 		inv:   inv,
 		width: width,
-		rows:  buildRows(inv.Args),
+		rows:  append(buildEnvRows(inv.Env), buildRows(inv.Args)...),
 		input: ti,
 	}
 }
@@ -246,6 +293,10 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			copy(snapshot, m.rows)
 			m.undo = &undoEntry{rows: snapshot, rowPos: m.row}
 			m.rows = append(m.rows[:m.row:m.row], m.rows[m.row+1:]...)
+			if !hasEnvRow(m.rows) {
+				m.rows = append([]displayRow{{kind: rowEnv}}, m.rows...)
+				m.row = 0
+			}
 			if m.row >= len(m.rows) && m.row > 0 {
 				m.row--
 			}
@@ -333,7 +384,7 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			m.undo = &undoEntry{rows: snapshot, rowPos: m.row}
 			newRows := make([]displayRow, len(m.rows)+1)
 			copy(newRows, m.rows[:insertAt])
-			newRows[insertAt] = displayRow{}
+			newRows[insertAt] = displayRow{kind: m.rows[m.row].kind}
 			copy(newRows[insertAt+1:], m.rows[insertAt:])
 			m.rows = newRows
 			m.row = insertAt
@@ -402,6 +453,9 @@ func (m detailModel) updateEditing(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 }
 
 func (m detailModel) pushCell() (detailModel, tea.Cmd) {
+	if m.onButton() || m.rows[m.row].kind != rowArg {
+		return m, nil
+	}
 	cur := m.currentCell()
 	snapshot := make([]displayRow, len(m.rows))
 	copy(snapshot, m.rows)
@@ -419,8 +473,8 @@ func (m detailModel) pushCell() (detailModel, tea.Cmd) {
 			newRows := make([]displayRow, len(m.rows)+1)
 			copy(newRows, m.rows[:insertAt])
 			copy(newRows[insertAt+1:], m.rows[insertAt:])
-			newRows[m.row] = displayRow{name: cur[:len(cur)-1], value: ""}
-			newRows[insertAt] = displayRow{name: peeled, value: ""}
+			newRows[m.row] = displayRow{kind: rowArg, name: cur[:len(cur)-1], value: ""}
+			newRows[insertAt] = displayRow{kind: rowArg, name: peeled, value: ""}
 			m.rows = newRows
 		}
 	} else if m.col == 0 && isSingleShortFlag(m.rows[m.row]) && m.rows[m.row].value == "" &&
@@ -441,11 +495,11 @@ func (m detailModel) pushCell() (detailModel, tea.Cmd) {
 		copy(newRows, m.rows[:insertAt])
 		copy(newRows[insertAt+1:], m.rows[insertAt:])
 		if m.col == 0 {
-			newRows[m.row] = displayRow{name: "", value: m.rows[m.row].value}
-			newRows[insertAt] = displayRow{name: cur, value: ""}
+			newRows[m.row] = displayRow{kind: rowArg, name: "", value: m.rows[m.row].value}
+			newRows[insertAt] = displayRow{kind: rowArg, name: cur, value: ""}
 		} else {
-			newRows[m.row] = displayRow{name: m.rows[m.row].name, value: ""}
-			newRows[insertAt] = displayRow{name: "", value: cur}
+			newRows[m.row] = displayRow{kind: rowArg, name: m.rows[m.row].name, value: ""}
+			newRows[insertAt] = displayRow{kind: rowArg, name: "", value: cur}
 		}
 		m.rows = newRows
 	}
@@ -464,7 +518,7 @@ func isShortFlagCluster(dr displayRow) bool {
 }
 
 func (m detailModel) mergeBack() detailModel {
-	if m.onButton() || m.row == 0 {
+	if m.onButton() || m.row == 0 || m.rows[m.row].kind != rowArg || m.rows[m.row-1].kind != rowArg {
 		return m
 	}
 	cur := m.rows[m.row]
@@ -532,7 +586,7 @@ func mergedTokens(rows []displayRow, secretsVisible bool) []string {
 	i := 0
 	for i < len(rows) {
 		dr := rows[i]
-		if dr.disabled {
+		if dr.kind != rowArg || dr.disabled {
 			i++
 			continue
 		}
@@ -568,16 +622,39 @@ func mergedTokens(rows []displayRow, secretsVisible bool) []string {
 	return tokens
 }
 
+func envTokens(rows []displayRow, secretsVisible bool) []string {
+	var tokens []string
+	for _, dr := range rows {
+		if dr.kind != rowEnv || dr.disabled || dr.name == "" {
+			continue
+		}
+		val := dr.value
+		if !secretsVisible && dr.secret {
+			val = "••••"
+		}
+		tokens = append(tokens, dr.name+"="+val)
+	}
+	return tokens
+}
+
 func (m detailModel) liveArgv() []string {
-	return domain.ExpandExecArgv(m.rawArgv())
+	return domain.ExpandExecArgvWithEnv(m.rawArgv(), m.liveEnv())
+}
+
+func (m detailModel) liveEnv() []string {
+	return domain.ExpandEnvAssignments(envTokens(m.rows, true))
 }
 
 func (m detailModel) rawArgv() []string {
 	return append([]string{m.inv.Command}, mergedTokens(m.rows, true)...)
 }
 
+func (m detailModel) rawCommandTokens() []string {
+	return append(envTokens(m.rows, true), m.rawArgv()...)
+}
+
 func (m detailModel) copyCommand() string {
-	return strings.Join(append([]string{m.inv.Command}, mergedTokens(m.rows, false)...), " ")
+	return strings.Join(append(envTokens(m.rows, false), append([]string{m.inv.Command}, mergedTokens(m.rows, false)...)...), " ")
 }
 
 func (m detailModel) liveCommand() string {
@@ -590,14 +667,14 @@ func (m detailModel) liveCommand() string {
 			rows[m.row].value = m.input.Value()
 		}
 	}
-	return strings.Join(append([]string{m.inv.Command}, mergedTokens(rows, true)...), " ")
+	return strings.Join(append(envTokens(rows, true), append([]string{m.inv.Command}, mergedTokens(rows, true)...)...), " ")
 }
 
-func envHint(value string) string {
+func envHint(value string, env []string) string {
 	if !strings.Contains(value, "$") && !strings.HasPrefix(value, "~") {
 		return ""
 	}
-	expanded := domain.ExpandExecArgv([]string{"_", value})[1]
+	expanded := domain.ExpandExecArgvWithEnv([]string{"_", value}, env)[1]
 	if expanded == value {
 		return ""
 	}
@@ -614,68 +691,31 @@ func (m detailModel) View() string {
 	}
 	last := m.inv.LastRun()
 	b.WriteString(hintStyle.Render(fmt.Sprintf("  %s  •  %s", last.RunAt.Format("02/01/2006 15:04:05"), last.Cwd)) + "\n\n")
+	env := m.liveEnv()
 
+	b.WriteString(fmt.Sprintf("  %s  %s\n",
+		cellHeader.Render(padStr("env var", colNameW)),
+		cellHeader.Render(padStr("value", colValueW)),
+	))
+	b.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("178")).Render(strings.Repeat("─", colNameW+colValueW+4)) + "\n")
+	for r, dr := range m.rows {
+		if dr.kind != rowEnv {
+			continue
+		}
+		b.WriteString(m.renderRow(r, dr, env) + "\n")
+	}
+
+	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("  %s  %s\n",
 		cellHeader.Render(padStr("name/flag", colNameW)),
 		cellHeader.Render(padStr("value", colValueW)),
 	))
 	b.WriteString("  " + sectionStyle.Render(strings.Repeat("─", colNameW+colValueW+4)) + "\n")
-
 	for r, dr := range m.rows {
-		isActive := r == m.row && !m.onButton()
-
-		var nameText string
-		if isActive && m.col == 0 && m.mode == modeEditing {
-			nameText = m.input.View()
-		} else {
-			nameText = padStr(dr.name, colNameW)
+		if dr.kind != rowArg {
+			continue
 		}
-
-		var valText string
-		if isActive && m.col == 1 && m.mode == modeEditing {
-			valText = m.input.View()
-		} else {
-			v := dr.value
-			if dr.secret {
-				v = "••••"
-			}
-			hint := ""
-			if !dr.secret {
-				hint = envHint(dr.value)
-			}
-			if hint != "" {
-				valText = padStr(v, colValueW) + " " + hint
-			} else {
-				valText = padStr(v, colValueW)
-			}
-		}
-
-		var nameCell, valCell string
-		switch {
-		case dr.disabled:
-			nameCell = disabledMark.Render("✗ ") + cellDisabled.Render(padStr(dr.name, colNameW))
-			valCell = cellDisabled.Render(padStr(dr.value, colValueW))
-		case isActive:
-			nameCell = styledCell(nameText, 0, m.col, cellName)
-			valCell = styledCell(valText, 1, m.col, cellValue)
-		default:
-			nameCell = cellName.Render(nameText)
-			if hint := envHint(dr.value); hint != "" && !dr.secret {
-				plain := padStr(dr.value, colValueW)
-				if dr.secret {
-					plain = padStr("••••", colValueW)
-				}
-				valCell = cellValue.Render(plain) + " " + cellEnvHint.Render(hint)
-			} else {
-				valCell = cellValue.Render(valText)
-			}
-		}
-
-		line := fmt.Sprintf("  %s  %s", nameCell, valCell)
-		if isActive {
-			line = rowActiveStyle.Render(line)
-		}
-		b.WriteString(line + "\n")
+		b.WriteString(m.renderRow(r, dr, env) + "\n")
 	}
 
 	b.WriteString("\n")
@@ -703,7 +743,7 @@ func (m detailModel) View() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("113")).Bold(true).Render("  ✓ saved!") + "\n")
 		b.WriteString("\n")
 	} else if m.helpVisible {
-		b.WriteString(hintStyle.Render("  hjkl/arrows: navigate  •  i/enter: edit  •  ci: change  •  a: add row  •  dd: delete row  •  u: undo") + "\n")
+		b.WriteString(hintStyle.Render("  hjkl/arrows: navigate  •  i/enter: edit  •  ci: change cell  •  a: add row  •  dd: delete row  •  u: undo") + "\n")
 		b.WriteString(hintStyle.Render("  m: merge flag back  •  M: push flag forward  •  space: toggle row  •  s: secret  •  S: save") + "\n")
 		b.WriteString(hintStyle.Render("  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  esc: back  •  q: quit  •  ?: hide") + "\n")
 	} else {
@@ -711,6 +751,80 @@ func (m detailModel) View() string {
 	}
 
 	return b.String()
+}
+
+func (m detailModel) renderRow(r int, dr displayRow, env []string) string {
+	isActive := r == m.row && !m.onButton()
+
+	var nameText string
+	if isActive && m.col == 0 && m.mode == modeEditing {
+		nameText = m.input.View()
+	} else if dr.kind == rowEnv && dr.name == "" && dr.value == "" {
+		nameText = padStr("enter env var here", colNameW)
+	} else {
+		nameText = padStr(dr.name, colNameW)
+	}
+
+	var valText string
+	if isActive && m.col == 1 && m.mode == modeEditing {
+		valText = m.input.View()
+	} else {
+		v := dr.value
+		if dr.secret {
+			v = "••••"
+		}
+		hint := ""
+		if !dr.secret {
+			hint = envHint(dr.value, env)
+		}
+		if hint != "" {
+			valText = padStr(v, colValueW) + " " + hint
+		} else {
+			valText = padStr(v, colValueW)
+		}
+	}
+
+	var nameCell, valCell string
+	switch {
+	case dr.disabled:
+		nameCell = disabledMark.Render("✗ ") + cellDisabled.Render(padStr(dr.name, colNameW))
+		valCell = cellDisabled.Render(padStr(dr.value, colValueW))
+	case isActive:
+		nameStyle := cellName
+		valStyle := cellValue
+		if dr.kind == rowEnv {
+			nameStyle = cellEnvName
+			valStyle = cellEnvValue
+		}
+		nameCell = styledCell(nameText, 0, m.col, nameStyle)
+		valCell = styledCell(valText, 1, m.col, valStyle)
+	default:
+		nameStyle := cellName
+		valStyle := cellValue
+		if dr.kind == rowEnv {
+			nameStyle = cellEnvName
+			valStyle = cellEnvValue
+			if dr.name == "" && dr.value == "" {
+				nameStyle = cellEnvEmpty
+			}
+		}
+		nameCell = nameStyle.Render(nameText)
+		if hint := envHint(dr.value, env); hint != "" && !dr.secret {
+			plain := padStr(dr.value, colValueW)
+			if dr.secret {
+				plain = padStr("••••", colValueW)
+			}
+			valCell = valStyle.Render(plain) + " " + cellEnvHint.Render(hint)
+		} else {
+			valCell = valStyle.Render(valText)
+		}
+	}
+
+	line := fmt.Sprintf("  %s  %s", nameCell, valCell)
+	if isActive {
+		line = rowActiveStyle.Render(line)
+	}
+	return line
 }
 
 func styledCell(text string, col, cursorCol int, base lipgloss.Style) string {
