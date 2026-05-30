@@ -66,6 +66,7 @@ var (
 		Save:        key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "save")),
 		PushCell:    key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "push cell to next line")),
 		MergeBack:   key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "merge flag into previous row")),
+		Redirects:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "toggle redirects")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
 	}
 )
@@ -108,6 +109,7 @@ type detailKeyMap struct {
 	Save        key.Binding
 	PushCell    key.Binding
 	MergeBack   key.Binding
+	Redirects   key.Binding
 	Help        key.Binding
 }
 
@@ -257,20 +259,21 @@ type copiedMsg struct{}
 type savedMsg struct{}
 
 type detailModel struct {
-	inv           domain.Invocation
-	width         int
-	rows          []displayRow
-	row           int // 0..len(rows)-1 = arg rows; len(rows) = Run button
-	col           int
-	mode          detailMode
-	cArmed        bool
-	dArmed        bool
-	input         textinput.Model
-	execRequested bool
-	undo          *undoEntry
-	copied        bool
-	saved         bool
-	helpVisible   bool
+	inv              domain.Invocation
+	width            int
+	rows             []displayRow
+	row              int // 0..len(rows)-1 = arg rows; len(rows) = Run button
+	col              int
+	mode             detailMode
+	cArmed           bool
+	dArmed           bool
+	input            textinput.Model
+	execRequested    bool
+	undo             *undoEntry
+	copied           bool
+	saved            bool
+	helpVisible      bool
+	redirectsVisible bool
 }
 
 func (m detailModel) canExec() bool {
@@ -323,10 +326,11 @@ func newDetailModel(inv domain.Invocation, width int) detailModel {
 	rows := append(append(buildEnvRows(inv.Env), buildCommandRow(inv.Command)), buildRows(inv.Args)...)
 	rows = append(rows, buildRedirectRows(inv.Stdout, inv.Stderr)...)
 	return detailModel{
-		inv:   inv,
-		width: width,
-		rows:  rows,
-		input: ti,
+		inv:              inv,
+		width:            width,
+		rows:             rows,
+		input:            ti,
+		redirectsVisible: !inv.Stdout.IsZero() || !inv.Stderr.IsZero(),
 	}
 }
 
@@ -408,11 +412,21 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 	case key.Matches(msg, detailKeys.Up):
 		if m.row > 0 {
 			m.row--
+			if !m.redirectsVisible {
+				for m.row > 0 && m.rows[m.row].kind == rowRedirect {
+					m.row--
+				}
+			}
 		}
 		m.normalizeCursor()
 	case key.Matches(msg, detailKeys.Down):
 		if m.row < len(m.rows) {
 			m.row++
+			if !m.redirectsVisible {
+				for m.row < len(m.rows) && m.rows[m.row].kind == rowRedirect {
+					m.row++
+				}
+			}
 		}
 		m.normalizeCursor()
 	case key.Matches(msg, detailKeys.Left):
@@ -515,6 +529,14 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			m.col = 0
 			m.normalizeCursor()
 			return m.startEditing("")
+		}
+	case key.Matches(msg, detailKeys.Redirects):
+		m.redirectsVisible = !m.redirectsVisible
+		if !m.redirectsVisible && !m.onButton() && m.rows[m.row].kind == rowRedirect {
+			for m.row > 0 && m.rows[m.row].kind == rowRedirect {
+				m.row--
+			}
+			m.normalizeCursor()
 		}
 	case key.Matches(msg, detailKeys.Help):
 		m.helpVisible = !m.helpVisible
@@ -903,19 +925,20 @@ func (m detailModel) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("  %s  %s\n",
-		cellHeader.Render(padStr("stream", colNameW)),
-		cellHeader.Render(padStr("redirect to", colValueW)),
-	))
-	b.WriteString("  " + sectionStyle.Render(strings.Repeat("─", colNameW+colValueW+4)) + "\n")
-	for r, dr := range m.rows {
-		if dr.kind != rowRedirect {
-			continue
+	if m.redirectsVisible {
+		b.WriteString(fmt.Sprintf("  %s  %s\n",
+			cellHeader.Render(padStr("stream", colNameW)),
+			cellHeader.Render(padStr("redirect to", colValueW)),
+		))
+		b.WriteString("  " + sectionStyle.Render(strings.Repeat("─", colNameW+colValueW+4)) + "\n")
+		for r, dr := range m.rows {
+			if dr.kind != rowRedirect {
+				continue
+			}
+			b.WriteString(m.renderRedirectRow(r, dr) + "\n")
 		}
-		b.WriteString(m.renderRedirectRow(r, dr) + "\n")
+		b.WriteString("\n")
 	}
-
-	b.WriteString("\n")
 	btnStyle := runBtnNormal
 	if m.onButton() {
 		btnStyle = runBtnFocused
@@ -942,9 +965,9 @@ func (m detailModel) View() string {
 	} else if m.helpVisible {
 		b.WriteString(hintStyle.Render("  hjkl/arrows: navigate  •  i/enter: edit  •  ci: change cell  •  a: add row  •  dd: delete row  •  u: undo") + "\n")
 		b.WriteString(hintStyle.Render("  m: merge flag back  •  M: push flag forward  •  space: toggle row  •  s: secret  •  S: save") + "\n")
-		b.WriteString(hintStyle.Render("  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  esc: back  •  q: quit  •  ?: hide") + "\n")
+		b.WriteString(hintStyle.Render("  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  r: redirects  •  esc: back  •  q: quit  •  ?: hide") + "\n")
 	} else {
-		b.WriteString(hintStyle.Render("  hjkl: navigate  •  i: edit  •  a: add row  •  dd: delete  •  m/M: move flag  •  S: save  •  x: exec  •  ?: more") + "\n")
+		b.WriteString(hintStyle.Render("  hjkl: navigate  •  i: edit  •  a: add row  •  dd: delete  •  m/M: move flag  •  S: save  •  x: exec  •  r: redirects  •  ?: more") + "\n")
 	}
 
 	return b.String()
