@@ -100,7 +100,13 @@ func (s *historyService) SaveLayout(invID string, env []domain.EnvVar, args []do
 
 func (s *historyService) SaveEdited(orig, updated domain.Invocation) error {
 	if updated.CommandFingerprint() == orig.CommandFingerprint() {
-		return s.SaveLayout(orig.ID, updated.Env, updated.Args)
+		return s.mutateByID(orig.ID, func(inv *domain.Invocation) {
+			inv.Env = updated.Env
+			inv.Args = updated.Args
+			inv.Stdout = updated.Stdout
+			inv.Stderr = updated.Stderr
+			inv.Chain = updated.Chain
+		})
 	}
 	return s.Record(updated)
 }

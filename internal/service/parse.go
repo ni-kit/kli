@@ -14,18 +14,60 @@ func Parse(argv []string) domain.Invocation {
 	return parseWithTime(argv, time.Now(), cwd)
 }
 
+type chainSegment struct {
+	op     domain.ChainOp
+	tokens []string
+}
+
+// splitChainSegments splits argv on standalone "&&" and "|" tokens.
+func splitChainSegments(argv []string) []chainSegment {
+	var segs []chainSegment
+	var cur []string
+	var curOp domain.ChainOp
+	for _, tok := range argv {
+		switch tok {
+		case "&&", "|":
+			segs = append(segs, chainSegment{op: curOp, tokens: cur})
+			cur = nil
+			curOp = domain.ChainOp(tok)
+		default:
+			cur = append(cur, tok)
+		}
+	}
+	segs = append(segs, chainSegment{op: curOp, tokens: cur})
+	return segs
+}
+
 func parseWithTime(argv []string, t time.Time, cwd string) domain.Invocation {
+	segs := splitChainSegments(argv)
+	inv := parseSegmentTokens(segs[0].tokens)
+	inv.ID = newID()
+	inv.Runs = []domain.Run{{RunAt: t, Cwd: cwd}}
+	for _, seg := range segs[1:] {
+		if len(seg.tokens) == 0 {
+			continue
+		}
+		link := parseChainLink(seg)
+		inv.Chain = append(inv.Chain, link)
+	}
+	return inv
+}
+
+func parseSegmentTokens(argv []string) domain.Invocation {
+	if len(argv) == 0 {
+		return domain.Invocation{}
+	}
 	env, argv := splitLeadingEnv(argv)
+	if len(argv) == 0 {
+		return domain.Invocation{Env: env}
+	}
 	tokens, stdout, stderr := extractRedirects(argv[1:])
 	inv := domain.Invocation{
-		ID:      newID(),
 		Command: argv[0],
 		Env:     env,
 		Stdout:  stdout,
 		Stderr:  stderr,
-		Runs:    []domain.Run{{RunAt: t, Cwd: cwd}},
 	}
-
 	for i := 0; i < len(tokens); i++ {
 		tok := tokens[i]
 		switch {
@@ -40,7 +82,6 @@ func parseWithTime(argv []string, t time.Time, cwd string) domain.Invocation {
 			} else {
 				inv.Args = append(inv.Args, domain.Arg{Kind: domain.ArgLongFlag, Name: name})
 			}
-
 		case strings.HasPrefix(tok, "-") && len(tok) > 1:
 			letters := tok[1:]
 			for j, ch := range letters {
@@ -50,12 +91,23 @@ func parseWithTime(argv []string, t time.Time, cwd string) domain.Invocation {
 					inv.Args = append(inv.Args, domain.Arg{Kind: domain.ArgFlagValue, Value: tokens[i]})
 				}
 			}
-
 		default:
 			inv.Args = append(inv.Args, domain.Arg{Kind: domain.ArgPositional, Value: tok})
 		}
 	}
 	return inv
+}
+
+func parseChainLink(seg chainSegment) domain.ChainLink {
+	inv := parseSegmentTokens(seg.tokens)
+	return domain.ChainLink{
+		Op:      seg.op,
+		Command: inv.Command,
+		Env:     inv.Env,
+		Args:    inv.Args,
+		Stdout:  inv.Stdout,
+		Stderr:  inv.Stderr,
+	}
 }
 
 func splitLeadingEnv(argv []string) ([]domain.EnvVar, []string) {

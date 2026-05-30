@@ -73,6 +73,72 @@ func TestExtractRedirects(t *testing.T) {
 	}
 }
 
+func TestParseChain(t *testing.T) {
+	tests := []struct {
+		name      string
+		argv      []string
+		wantChain []struct {
+			op      domain.ChainOp
+			command string
+		}
+	}{
+		{
+			name: "and chain",
+			argv: []string{"git", "add", ".", "&&", "git", "commit", "-m", "msg"},
+			wantChain: []struct {
+				op      domain.ChainOp
+				command string
+			}{
+				{domain.ChainAnd, "git"},
+			},
+		},
+		{
+			name: "pipe chain",
+			argv: []string{"ls", "-la", "|", "grep", "foo"},
+			wantChain: []struct {
+				op      domain.ChainOp
+				command string
+			}{
+				{domain.ChainPipe, "grep"},
+			},
+		},
+		{
+			name: "three commands",
+			argv: []string{"a", "&&", "b", "|", "c"},
+			wantChain: []struct {
+				op      domain.ChainOp
+				command string
+			}{
+				{domain.ChainAnd, "b"},
+				{domain.ChainPipe, "c"},
+			},
+		},
+		{
+			name:      "no chain",
+			argv:      []string{"git", "status"},
+			wantChain: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := Parse(tc.argv)
+			if len(inv.Chain) != len(tc.wantChain) {
+				t.Fatalf("chain len: got %d, want %d", len(inv.Chain), len(tc.wantChain))
+			}
+			for i, w := range tc.wantChain {
+				got := inv.Chain[i]
+				if got.Op != w.op {
+					t.Errorf("chain[%d].Op: got %q, want %q", i, got.Op, w.op)
+				}
+				if got.Command != w.command {
+					t.Errorf("chain[%d].Command: got %q, want %q", i, got.Command, w.command)
+				}
+			}
+		})
+	}
+}
+
 func TestParse(t *testing.T) {
 	type wantArg struct {
 		kind  domain.ArgKind

@@ -18,20 +18,16 @@ const (
 const kliTitle = "  kli — command history manager"
 
 type App struct {
-	screen         screen
-	invocations    []domain.Invocation
-	historySvc     service.HistoryService
-	history        historyModel
-	detail         detailModel
-	width          int
-	height         int
-	histExecArgv   []string
-	histExecEnv    []string
-	histExecStdout domain.StreamRedirect
-	histExecStderr domain.StreamRedirect
-	histRecordArgv []string
-	initialSearch  string
-	startOnDetail  *domain.Invocation // non-nil → open detail screen immediately
+	screen        screen
+	invocations   []domain.Invocation
+	historySvc    service.HistoryService
+	history       historyModel
+	detail        detailModel
+	width         int
+	height        int
+	histExecInv   *domain.Invocation // non-nil when exec was requested from history screen
+	initialSearch string
+	startOnDetail *domain.Invocation // non-nil → open detail screen immediately
 }
 
 func NewApp(invocations []domain.Invocation, historySvc service.HistoryService) *App {
@@ -111,11 +107,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case msg.String() == "x":
 				inv := a.history.selectedInvocation()
 				if inv != nil {
-					a.histExecArgv = inv.ExpandedArgv()
-					a.histExecEnv = inv.ExpandedEnv()
-					a.histExecStdout = inv.Stdout
-					a.histExecStderr = inv.Stderr
-					a.histRecordArgv = inv.RawCommandTokens()
+					a.histExecInv = inv
 					return a, tea.Quit
 				}
 				return a, nil
@@ -184,60 +176,28 @@ func (a *App) View() tea.View {
 	return v
 }
 
+// ExecRequested reports whether the user asked to execute a command.
 func (a *App) ExecRequested() bool {
-	return len(a.histExecArgv) > 0 || (a.screen == screenDetail && a.detail.ExecRequested())
+	return a.histExecInv != nil || (a.screen == screenDetail && a.detail.ExecRequested())
 }
 
-func (a *App) ExecArgv() []string {
-	if len(a.histExecArgv) > 0 {
-		return a.histExecArgv
+// ExecInvocation returns the invocation the user wants to execute.
+// Callers must check ExecRequested() first.
+func (a *App) ExecInvocation() domain.Invocation {
+	if a.histExecInv != nil {
+		return *a.histExecInv
 	}
-	return a.detail.ExecArgv()
-}
-
-func (a *App) ExecEnv() []string {
-	if len(a.histExecArgv) > 0 {
-		return a.histExecEnv
-	}
-	return a.detail.ExecEnv()
-}
-
-func (a *App) ExecStdout() domain.StreamRedirect {
-	if len(a.histExecArgv) > 0 {
-		return a.histExecStdout
-	}
-	return a.detail.CurrentStdout()
-}
-
-func (a *App) ExecStderr() domain.StreamRedirect {
-	if len(a.histExecArgv) > 0 {
-		return a.histExecStderr
-	}
-	return a.detail.CurrentStderr()
+	return a.detail.CurrentInvocation()
 }
 
 func (a *App) saveDetail() {
 	orig := a.detail.OriginalInvocation()
-	updated := domain.Invocation{
-		Command: a.detail.CurrentCommand(),
-		Env:     a.detail.CurrentEnv(),
-		Args:    a.detail.CurrentArgs(),
-		Stdout:  a.detail.CurrentStdout(),
-		Stderr:  a.detail.CurrentStderr(),
-		Runs:    []domain.Run{orig.LastRun()},
-	}
+	updated := a.detail.CurrentInvocation()
+	updated.Runs = []domain.Run{orig.LastRun()}
 	_ = a.historySvc.SaveEdited(orig, updated)
 
 	if invs, err := a.historySvc.All(); err == nil {
 		a.invocations = invs
 		a.history.reloadInvocations(invs)
 	}
-}
-
-// RecordArgv returns the unexpanded argv to save to history (env vars kept as-is).
-func (a *App) RecordArgv() []string {
-	if len(a.histRecordArgv) > 0 {
-		return a.histRecordArgv
-	}
-	return a.detail.rawCommandTokens()
 }

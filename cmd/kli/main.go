@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -16,6 +18,8 @@ import (
 	"github.com/ni-kit/kli/internal/tui"
 )
 
+// applyRedirects applies stdout/stderr redirects to the current process file
+// descriptors via dup2 — used immediately before syscall.Exec.
 func applyRedirects(stdout, stderr domain.StreamRedirect) error {
 	if err := applyStreamRedirect(1, stdout); err != nil {
 		return err
@@ -51,6 +55,52 @@ func applyStreamRedirect(fd int, r domain.StreamRedirect) error {
 			return err
 		}
 		return syscall.Dup2(int(f.Fd()), fd)
+	}
+	return nil
+}
+
+// openWriteTarget opens a file or /dev/null for a redirect. Returns nil writer
+// when the redirect target is RedirectToOther (caller handles that case).
+func openWriteTarget(r domain.StreamRedirect) (io.Writer, error) {
+	switch r.Target {
+	case domain.RedirectNull:
+		return io.Discard, nil
+	case domain.RedirectFile:
+		flags := os.O_WRONLY | os.O_CREATE
+		if r.Append {
+			flags |= os.O_APPEND
+		} else {
+			flags |= os.O_TRUNC
+		}
+		return os.OpenFile(r.File, flags, 0o644)
+	}
+	return nil, nil
+}
+
+// applyRedirectsToCmd sets cmd.Stdout/Stderr according to redirect config.
+// Must be called after cmd.Stdout/Stderr are already set to their defaults.
+func applyRedirectsToCmd(cmd *exec.Cmd, stdout, stderr domain.StreamRedirect) error {
+	if !stdout.IsZero() {
+		if stdout.Target == domain.RedirectToOther {
+			cmd.Stdout = cmd.Stderr
+		} else {
+			w, err := openWriteTarget(stdout)
+			if err != nil {
+				return err
+			}
+			cmd.Stdout = w
+		}
+	}
+	if !stderr.IsZero() {
+		if stderr.Target == domain.RedirectToOther {
+			cmd.Stderr = cmd.Stdout
+		} else {
+			w, err := openWriteTarget(stderr)
+			if err != nil {
+				return err
+			}
+			cmd.Stderr = w
+		}
 	}
 	return nil
 }
@@ -101,7 +151,7 @@ func main() {
 		if err := historySvc.Record(inv); err != nil {
 			fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 		}
-		execArgv(inv.ExpandedArgv(), inv.ExpandedEnv(), inv.Stdout, inv.Stderr)
+		execInvocation(inv)
 	}
 
 	if len(opts.recordArgv) > 0 {
@@ -148,11 +198,10 @@ func main() {
 		}
 
 		if opts.latestAction == latestExec {
-			rawTokens := inv.RawCommandTokens()
-			if err := historySvc.Record(service.Parse(rawTokens)); err != nil {
+			if err := historySvc.Record(service.Parse(inv.RawCommandTokens())); err != nil {
 				fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 			}
-			execArgv(inv.ExpandedArgv(), inv.ExpandedEnv(), inv.Stdout, inv.Stderr)
+			execInvocation(*inv)
 		}
 
 		runApp(tui.NewAppOnDetail(*inv, invocations, historySvc), historySvc)
@@ -248,22 +297,33 @@ func runApp(app *tui.App, historySvc service.HistoryService) {
 	}
 
 	if app.ExecRequested() {
-		argv := app.ExecArgv()
-		env := app.ExecEnv()
-		stdout := app.ExecStdout()
-		stderr := app.ExecStderr()
-		executed := service.Parse(app.RecordArgv())
-		executed.Stdout = stdout
-		executed.Stderr = stderr
-		if err := historySvc.Record(executed); err != nil {
+		inv := app.ExecInvocation()
+
+		// Record with a fresh run timestamp so the exec shows up in history.
+		cwd, _ := os.Getwd()
+		toRecord := inv
+		toRecord.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+		toRecord.Runs = []domain.Run{{RunAt: time.Now(), Cwd: cwd}}
+		if err := historySvc.Record(toRecord); err != nil {
 			fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 		}
 
-		execArgv(argv, env, stdout, stderr)
+		execInvocation(inv)
 	}
 }
 
-func execArgv(argv []string, env []string, stdout, stderr domain.StreamRedirect) {
+// execInvocation executes an invocation, replacing the current process with the
+// final command. Chains are handled natively without involving a shell.
+func execInvocation(inv domain.Invocation) {
+	if !inv.IsChain() {
+		execSingle(inv.ExpandedArgv(), inv.ExpandedEnv(), inv.Stdout, inv.Stderr)
+		return
+	}
+	execNativeChain(inv)
+}
+
+// execSingle prints a preview and replaces the current process via syscall.Exec.
+func execSingle(argv, env []string, stdout, stderr domain.StreamRedirect) {
 	var preview []string
 	preview = append(preview, env...)
 	preview = append(preview, argv...)
@@ -288,6 +348,250 @@ func execArgv(argv []string, env []string, stdout, stderr domain.StreamRedirect)
 		fmt.Fprintln(os.Stderr, "kli: exec failed:", err)
 		os.Exit(1)
 	}
+}
+
+// pipeEnds holds the two ends of an os.Pipe.
+type pipeEnds struct{ r, w *os.File }
+
+func mustPipe() pipeEnds {
+	r, w, err := os.Pipe()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "kli: pipe:", err)
+		os.Exit(1)
+	}
+	return pipeEnds{r, w}
+}
+
+// execNativeChain runs a chained invocation natively:
+//   - "&&" groups are executed sequentially; the chain aborts on a non-zero exit.
+//   - "|" within a group connects processes via os.Pipe.
+//   - The very last command in the chain replaces the current process via syscall.Exec.
+func execNativeChain(inv domain.Invocation) {
+	fmt.Println("$", inv.FullCommand())
+	groups := chainAndGroups(inv.AllSegments())
+	for i, group := range groups {
+		if i == len(groups)-1 {
+			execLastPipeGroup(group) // never returns
+		} else {
+			if code := runPipeGroupAndWait(group); code != 0 {
+				os.Exit(code)
+			}
+		}
+	}
+}
+
+// chainAndGroups splits a flat segment list into pipeline sub-groups separated
+// by "&&". Segments within a group are connected by "|".
+func chainAndGroups(segs []domain.ChainLink) [][]domain.ChainLink {
+	var groups [][]domain.ChainLink
+	var cur []domain.ChainLink
+	for _, seg := range segs {
+		if seg.Op == domain.ChainAnd && len(cur) > 0 {
+			groups = append(groups, cur)
+			cur = nil
+		}
+		cur = append(cur, seg)
+	}
+	if len(cur) > 0 {
+		groups = append(groups, cur)
+	}
+	return groups
+}
+
+// execLastPipeGroup starts all but the last segment as child processes connected
+// by pipes, then replaces the current process with the last segment via
+// syscall.Exec. Never returns.
+func execLastPipeGroup(segs []domain.ChainLink) {
+	if len(segs) == 1 {
+		seg := segs[0]
+		argv, env := segExpandedArgvEnv(seg)
+		execSingle(argv, env, seg.Stdout, seg.Stderr)
+		return // unreachable — execSingle never returns
+	}
+
+	n := len(segs)
+	pipes := make([]pipeEnds, n-1)
+	for i := range pipes {
+		pipes[i] = mustPipe()
+	}
+
+	// Start all but the last as background children.
+	for i := 0; i < n-1; i++ {
+		seg := segs[i]
+		argv, env := segExpandedArgvEnv(seg)
+
+		bin, err := exec.LookPath(argv[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "kli: command not found:", argv[0])
+			os.Exit(1)
+		}
+
+		cmd := exec.Command(bin, argv[1:]...)
+		cmd.Env = mergedEnv(os.Environ(), env)
+		cmd.Stderr = os.Stderr
+
+		if i == 0 {
+			cmd.Stdin = os.Stdin
+		} else {
+			cmd.Stdin = pipes[i-1].r
+		}
+		cmd.Stdout = pipes[i].w
+
+		// Stderr redirect for this segment (stdout is going into the pipe).
+		if !seg.Stderr.IsZero() {
+			if err := applyRedirectsToCmd(cmd, domain.StreamRedirect{}, seg.Stderr); err != nil {
+				fmt.Fprintln(os.Stderr, "kli: redirect:", err)
+				os.Exit(1)
+			}
+		}
+
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, "kli: exec:", err)
+			os.Exit(1)
+		}
+
+		// Close the ends we've handed off to the child; keep only what we still need.
+		pipes[i].w.Close()
+		if i > 0 {
+			pipes[i-1].r.Close()
+		}
+	}
+
+	// Last segment: redirect stdin from the last pipe, then syscall.Exec.
+	lastSeg := segs[n-1]
+	argv, env := segExpandedArgvEnv(lastSeg)
+
+	bin, err := exec.LookPath(argv[0])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "kli: command not found:", argv[0])
+		os.Exit(1)
+	}
+
+	if err := syscall.Dup2(int(pipes[n-2].r.Fd()), 0 /*stdin*/); err != nil {
+		fmt.Fprintln(os.Stderr, "kli: dup2:", err)
+		os.Exit(1)
+	}
+	pipes[n-2].r.Close()
+
+	if err := applyRedirects(lastSeg.Stdout, lastSeg.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "kli: redirect:", err)
+		os.Exit(1)
+	}
+	if err := syscall.Exec(bin, argv, mergedEnv(os.Environ(), env)); err != nil {
+		fmt.Fprintln(os.Stderr, "kli: exec failed:", err)
+		os.Exit(1)
+	}
+}
+
+// runPipeGroupAndWait runs a pipeline group, waits for all processes to finish,
+// and returns the exit code of the last command in the group.
+func runPipeGroupAndWait(segs []domain.ChainLink) int {
+	if len(segs) == 1 {
+		seg := segs[0]
+		argv, env := segExpandedArgvEnv(seg)
+
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Env = mergedEnv(os.Environ(), env)
+
+		if err := applyRedirectsToCmd(cmd, seg.Stdout, seg.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, "kli: redirect:", err)
+			return 1
+		}
+		if err := cmd.Run(); err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				return exitErr.ExitCode()
+			}
+			return 1
+		}
+		return 0
+	}
+
+	n := len(segs)
+	pipes := make([]pipeEnds, n-1)
+	for i := range pipes {
+		pipes[i] = mustPipe()
+	}
+
+	cmds := make([]*exec.Cmd, n)
+	for i, seg := range segs {
+		argv, env := segExpandedArgvEnv(seg)
+
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Env = mergedEnv(os.Environ(), env)
+		cmd.Stderr = os.Stderr
+
+		if i == 0 {
+			cmd.Stdin = os.Stdin
+		} else {
+			cmd.Stdin = pipes[i-1].r
+		}
+		if i == n-1 {
+			cmd.Stdout = os.Stdout
+			if err := applyRedirectsToCmd(cmd, seg.Stdout, seg.Stderr); err != nil {
+				fmt.Fprintln(os.Stderr, "kli: redirect:", err)
+				return 1
+			}
+		} else {
+			cmd.Stdout = pipes[i].w
+			if !seg.Stderr.IsZero() {
+				if err := applyRedirectsToCmd(cmd, domain.StreamRedirect{}, seg.Stderr); err != nil {
+					fmt.Fprintln(os.Stderr, "kli: redirect:", err)
+					return 1
+				}
+			}
+		}
+
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, "kli: exec:", err)
+			return 1
+		}
+		cmds[i] = cmd
+
+		// Close the pipe ends we've handed to the child so they don't linger.
+		if i < n-1 {
+			pipes[i].w.Close() // child's stdout goes into the pipe
+		}
+		if i > 0 {
+			pipes[i-1].r.Close() // child's stdin came from the pipe
+		}
+	}
+
+	// Wait for all; the pipeline exit code is the last command's exit code.
+	code := 0
+	for i, cmd := range cmds {
+		err := cmd.Wait()
+		if i == n-1 && err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				code = exitErr.ExitCode()
+			} else {
+				code = 1
+			}
+		}
+	}
+	return code
+}
+
+// segExpandedArgvEnv returns the expanded argv and environment for a ChainLink.
+func segExpandedArgvEnv(seg domain.ChainLink) (argv, env []string) {
+	rawArgv := make([]string, 0, 1+len(seg.Args))
+	rawArgv = append(rawArgv, seg.Command)
+	for _, a := range seg.Args {
+		rawArgv = append(rawArgv, a.RawDisplay())
+	}
+
+	var rawEnv []string
+	for _, e := range seg.Env {
+		if e.Key != "" {
+			rawEnv = append(rawEnv, e.RawDisplay())
+		}
+	}
+
+	env = domain.ExpandEnvAssignments(rawEnv)
+	argv = domain.ExpandExecArgvWithEnv(rawArgv, env)
+	return
 }
 
 func mergedEnv(base []string, overrides []string) []string {

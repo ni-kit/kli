@@ -12,12 +12,32 @@ type Run struct {
 	Cwd   string
 }
 
+type ChainOp string
+
+const (
+	ChainAnd  ChainOp = "&&"
+	ChainPipe ChainOp = "|"
+)
+
+// ChainLink represents one segment in a chained command (e.g. cmd1 && cmd2 | cmd3).
+// Op is the operator that connects this segment to the previous one; it is empty
+// for the first segment when represented via AllSegments().
+type ChainLink struct {
+	Op      ChainOp
+	Command string
+	Env     []EnvVar
+	Args    []Arg
+	Stdout  StreamRedirect
+	Stderr  StreamRedirect
+}
+
 type Invocation struct {
 	ID      string
 	Command string
 	Env     []EnvVar
 	Args    []Arg
-	Runs    []Run // newest-first
+	Chain   []ChainLink // subsequent commands; nil = simple single command
+	Runs    []Run       // newest-first
 	Tags    []string
 	Stdout  StreamRedirect
 	Stderr  StreamRedirect
@@ -40,6 +60,23 @@ func (inv *Invocation) AddRun(r Run) {
 	inv.Runs = append([]Run{r}, inv.Runs...)
 }
 
+// IsChain reports whether this invocation consists of multiple chained commands.
+func (inv Invocation) IsChain() bool { return len(inv.Chain) > 0 }
+
+// AllSegments returns every segment of the invocation as a flat slice.
+// Segment 0 is the main command (Op is empty); subsequent segments carry their
+// connecting operator (ChainAnd or ChainPipe).
+func (inv Invocation) AllSegments() []ChainLink {
+	first := ChainLink{
+		Command: inv.Command,
+		Env:     inv.Env,
+		Args:    inv.Args,
+		Stdout:  inv.Stdout,
+		Stderr:  inv.Stderr,
+	}
+	return append([]ChainLink{first}, inv.Chain...)
+}
+
 func (inv Invocation) ArgsString() string {
 	parts := make([]string, 0, len(inv.Args))
 	for _, a := range inv.Args {
@@ -57,21 +94,54 @@ func (inv Invocation) ArgsPreview() string {
 }
 
 func (inv Invocation) FullCommand() string {
-	parts := make([]string, 0, len(inv.Env)+1+len(inv.Args)+2)
-	for _, e := range inv.Env {
-		parts = append(parts, e.Display())
-	}
-	parts = append(parts, inv.Command)
-	for _, a := range inv.Args {
-		parts = append(parts, a.Display())
-	}
-	if s := inv.Stdout.StdoutShell(); s != "" {
-		parts = append(parts, s)
-	}
-	if s := inv.Stderr.StderrShell(); s != "" {
-		parts = append(parts, s)
+	parts := segmentDisplayParts(inv.Command, inv.Env, inv.Args, inv.Stdout, inv.Stderr)
+	for _, link := range inv.Chain {
+		parts = append(parts, string(link.Op))
+		parts = append(parts, segmentDisplayParts(link.Command, link.Env, link.Args, link.Stdout, link.Stderr)...)
 	}
 	return strings.Join(parts, " ")
+}
+
+func segmentDisplayParts(command string, env []EnvVar, args []Arg, stdout, stderr StreamRedirect) []string {
+	parts := make([]string, 0, len(env)+1+len(args)+2)
+	for _, e := range env {
+		parts = append(parts, e.Display())
+	}
+	if command != "" {
+		parts = append(parts, command)
+	}
+	for _, a := range args {
+		parts = append(parts, a.Display())
+	}
+	if s := stdout.StdoutShell(); s != "" {
+		parts = append(parts, s)
+	}
+	if s := stderr.StderrShell(); s != "" {
+		parts = append(parts, s)
+	}
+	return parts
+}
+
+func segmentRawParts(command string, env []EnvVar, args []Arg, stdout, stderr StreamRedirect) []string {
+	parts := make([]string, 0, len(env)+1+len(args)+2)
+	for _, e := range env {
+		if e.Key != "" {
+			parts = append(parts, e.RawDisplay())
+		}
+	}
+	if command != "" {
+		parts = append(parts, command)
+	}
+	for _, a := range args {
+		parts = append(parts, a.RawDisplay())
+	}
+	if s := stdout.StdoutShell(); s != "" {
+		parts = append(parts, s)
+	}
+	if s := stderr.StderrShell(); s != "" {
+		parts = append(parts, s)
+	}
+	return parts
 }
 
 func (inv Invocation) RawArgv() []string {
@@ -98,6 +168,10 @@ func (inv Invocation) RawCommandTokens() []string {
 	tokens := make([]string, 0, len(inv.Env)+1+len(inv.Args))
 	tokens = append(tokens, inv.RawEnv()...)
 	tokens = append(tokens, inv.RawArgv()...)
+	for _, link := range inv.Chain {
+		tokens = append(tokens, string(link.Op))
+		tokens = append(tokens, segmentRawParts(link.Command, link.Env, link.Args, link.Stdout, link.Stderr)...)
+	}
 	return tokens
 }
 
@@ -197,15 +271,23 @@ func expandShortFlag(a Arg) []string {
 }
 
 func (inv Invocation) CommandFingerprint() string {
+	fp := segmentFingerprint(inv.Command, inv.Env, inv.Args, inv.Stdout, inv.Stderr)
+	for _, link := range inv.Chain {
+		fp += "|" + string(link.Op) + "|" + segmentFingerprint(link.Command, link.Env, link.Args, link.Stdout, link.Stderr)
+	}
+	return fp
+}
+
+func segmentFingerprint(command string, env []EnvVar, args []Arg, stdout, stderr StreamRedirect) string {
 	var flags []string
-	var env []string
+	var envStrs []string
 	var positionals []string
-	for _, e := range inv.Env {
+	for _, e := range env {
 		if e.Key != "" {
-			env = append(env, e.RawDisplay())
+			envStrs = append(envStrs, e.RawDisplay())
 		}
 	}
-	for _, a := range inv.Args {
+	for _, a := range args {
 		switch a.Kind {
 		case ArgShortFlag:
 			for _, letter := range expandShortFlag(a) {
@@ -217,9 +299,9 @@ func (inv Invocation) CommandFingerprint() string {
 			positionals = append(positionals, a.Value)
 		}
 	}
-	slices.Sort(env)
+	slices.Sort(envStrs)
 	slices.Sort(flags)
-	return strings.Join(env, ",") + "|" + inv.Command + "|" + strings.Join(flags, ",") + "|" + strings.Join(positionals, ",") + "|" + inv.Stdout.StdoutShell() + "|" + inv.Stderr.StderrShell()
+	return strings.Join(envStrs, ",") + "|" + command + "|" + strings.Join(flags, ",") + "|" + strings.Join(positionals, ",") + "|" + stdout.StdoutShell() + "|" + stderr.StderrShell()
 }
 
 func (inv Invocation) FlagSetFingerprint() string {

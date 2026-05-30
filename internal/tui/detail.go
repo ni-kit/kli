@@ -48,6 +48,10 @@ var (
 	redirectFileStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
 	redirectMissingStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")).Background(lipgloss.Color("196"))
 
+	chainDimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	chainAndStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("70"))
+	chainPipeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+
 	detailKeys = detailKeyMap{
 		Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
 		Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
@@ -275,8 +279,10 @@ type savedMsg struct{}
 type detailModel struct {
 	inv              domain.Invocation
 	width            int
-	rows             []displayRow
-	row              int // 0..len(rows)-1 = arg rows; len(rows) = Run button
+	rows             []displayRow   // current chain segment's rows
+	chainIdx         int            // index of currently edited chain segment
+	segRows          [][]displayRow // rows for all chain segments; segRows[chainIdx] may be stale
+	row              int            // 0..len(rows)-1 = arg rows; len(rows) = Run button
 	col              int
 	mode             detailMode
 	cArmed           bool
@@ -291,6 +297,20 @@ type detailModel struct {
 }
 
 func (m detailModel) canExec() bool {
+	if m.chainLen() > 1 {
+		allRows := m.allSegmentRows()
+		segs := m.inv.AllSegments()
+		for i, rows := range allRows {
+			fallback := ""
+			if i < len(segs) {
+				fallback = segs[i].Command
+			}
+			if rowsCommand(rows, fallback) == "" {
+				return false
+			}
+		}
+		return true
+	}
 	if m.CurrentCommand() == "" {
 		return false
 	}
@@ -304,8 +324,6 @@ func (m detailModel) canExec() bool {
 
 func (m detailModel) ExecRequested() bool                   { return m.execRequested }
 func (m detailModel) SaveRequested() bool                   { return m.saved }
-func (m detailModel) ExecArgv() []string                    { return m.liveArgv() }
-func (m detailModel) ExecEnv() []string                     { return m.liveEnv() }
 func (m detailModel) InvocationID() string                  { return m.inv.ID }
 func (m detailModel) OriginalInvocation() domain.Invocation { return m.inv }
 func (m detailModel) CurrentCommand() string                { return rowsCommand(m.rows, m.inv.Command) }
@@ -313,6 +331,15 @@ func (m detailModel) CurrentEnv() []domain.EnvVar           { return rowsToEnv(m
 func (m detailModel) CurrentArgs() []domain.Arg             { return rowsToArgs(m.rows) }
 func (m detailModel) CurrentStdout() domain.StreamRedirect  { return m.currentRedirect("stdout") }
 func (m detailModel) CurrentStderr() domain.StreamRedirect  { return m.currentRedirect("stderr") }
+
+// CurrentInvocation returns the full live state of all chain segments as a
+// domain.Invocation, suitable for saving or recording.
+func (m detailModel) CurrentInvocation() domain.Invocation {
+	return m.buildLiveInvocation()
+}
+
+// chainLen returns the total number of chain segments (1 for a simple command).
+func (m detailModel) chainLen() int { return len(m.segRows) }
 
 func (m detailModel) currentRedirect(name string) domain.StreamRedirect {
 	for _, dr := range m.rows {
@@ -340,15 +367,110 @@ func (m *detailModel) normalizeCursor() {
 func newDetailModel(inv domain.Invocation, width int) detailModel {
 	ti := textinput.New()
 	ti.CharLimit = 256
-	rows := append(append(buildEnvRows(inv.Env), buildCommandRow(inv.Command)), buildRows(inv.Args)...)
-	rows = append(rows, buildRedirectRows(inv.Stdout, inv.Stderr)...)
+
+	segs := inv.AllSegments()
+	segRows := make([][]displayRow, len(segs))
+	for i, seg := range segs {
+		rows := append(append(buildEnvRows(seg.Env), buildCommandRow(seg.Command)), buildRows(seg.Args)...)
+		rows = append(rows, buildRedirectRows(seg.Stdout, seg.Stderr)...)
+		segRows[i] = rows
+	}
+
+	redirectsVisible := !inv.Stdout.IsZero() || !inv.Stderr.IsZero()
+	if !redirectsVisible {
+		for _, link := range inv.Chain {
+			if !link.Stdout.IsZero() || !link.Stderr.IsZero() {
+				redirectsVisible = true
+				break
+			}
+		}
+	}
+
 	return detailModel{
 		inv:              inv,
 		width:            width,
-		rows:             rows,
+		rows:             segRows[0],
+		chainIdx:         0,
+		segRows:          segRows,
 		input:            ti,
-		redirectsVisible: !inv.Stdout.IsZero() || !inv.Stderr.IsZero(),
+		redirectsVisible: redirectsVisible,
 	}
+}
+
+// switchToChain saves the current segment's rows and loads the target segment.
+func (m *detailModel) switchToChain(idx int) {
+	if idx < 0 || idx >= m.chainLen() {
+		return
+	}
+	m.segRows[m.chainIdx] = m.rows
+	m.chainIdx = idx
+	m.rows = m.segRows[idx]
+	m.undo = nil
+}
+
+// allSegmentRows returns a snapshot of all segments' rows, with the current
+// segment's live rows (which may differ from segRows[chainIdx]).
+func (m detailModel) allSegmentRows() [][]displayRow {
+	result := make([][]displayRow, len(m.segRows))
+	copy(result, m.segRows)
+	result[m.chainIdx] = m.rows
+	return result
+}
+
+// redirectFromRows looks up a redirect row by name ("stdout" or "stderr").
+func redirectFromRows(rows []displayRow, name string) domain.StreamRedirect {
+	for _, dr := range rows {
+		if dr.kind == rowRedirect && dr.name == name {
+			return dr.redirect
+		}
+	}
+	return domain.StreamRedirect{}
+}
+
+// buildLiveInvocation assembles the current edits from all chain segments into
+// a complete Invocation, preserving ID, Tags, and Runs from the original.
+func (m detailModel) buildLiveInvocation() domain.Invocation {
+	allRows := m.allSegmentRows()
+	segs := m.inv.AllSegments()
+
+	fallback0 := ""
+	if len(segs) > 0 {
+		fallback0 = segs[0].Command
+	}
+	inv := domain.Invocation{
+		ID:      m.inv.ID,
+		Command: rowsCommand(allRows[0], fallback0),
+		Env:     rowsToEnv(allRows[0]),
+		Args:    rowsToArgs(allRows[0]),
+		Stdout:  redirectFromRows(allRows[0], "stdout"),
+		Stderr:  redirectFromRows(allRows[0], "stderr"),
+		Runs:    m.inv.Runs,
+		Tags:    m.inv.Tags,
+	}
+	for i := 1; i < len(allRows) && i-1 < len(m.inv.Chain); i++ {
+		origLink := m.inv.Chain[i-1]
+		inv.Chain = append(inv.Chain, domain.ChainLink{
+			Op:      origLink.Op,
+			Command: rowsCommand(allRows[i], origLink.Command),
+			Env:     rowsToEnv(allRows[i]),
+			Args:    rowsToArgs(allRows[i]),
+			Stdout:  redirectFromRows(allRows[i], "stdout"),
+			Stderr:  redirectFromRows(allRows[i], "stderr"),
+		})
+	}
+	return inv
+}
+
+// lastVisibleRowIdx returns the index of the last row that is visible given
+// the current redirectsVisible setting.
+func (m detailModel) lastVisibleRowIdx() int {
+	for i := len(m.rows) - 1; i >= 0; i-- {
+		if !m.redirectsVisible && m.rows[i].kind == rowRedirect {
+			continue
+		}
+		return i
+	}
+	return 0
 }
 
 func buildRedirectRows(stdout, stderr domain.StreamRedirect) []displayRow {
@@ -550,12 +672,38 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		}
 		m.normalizeCursor()
 	case key.Matches(msg, detailKeys.Left):
-		if !m.onButton() && !m.onCommandRow() && m.col > 0 {
+		switch {
+		case m.onButton():
+			// nothing
+		case m.onCommandRow() && m.chainIdx > 0:
+			m.switchToChain(m.chainIdx - 1)
+			m.row = m.lastVisibleRowIdx()
+			m.col = numCols - 1
+			m.normalizeCursor()
+		case !m.onCommandRow() && m.col > 0:
 			m.col--
+		case !m.onCommandRow() && m.col == 0 && m.chainIdx > 0:
+			m.switchToChain(m.chainIdx - 1)
+			m.row = m.lastVisibleRowIdx()
+			m.col = numCols - 1
+			m.normalizeCursor()
 		}
 	case key.Matches(msg, detailKeys.Right):
-		if !m.onButton() && !m.onCommandRow() && m.col < numCols-1 {
+		switch {
+		case m.onButton():
+			// nothing
+		case m.onCommandRow() && m.chainIdx < m.chainLen()-1:
+			m.switchToChain(m.chainIdx + 1)
+			m.row = 0
+			m.col = 0
+			m.normalizeCursor()
+		case !m.onCommandRow() && m.col < numCols-1:
 			m.col++
+		case !m.onCommandRow() && m.col == numCols-1 && m.chainIdx < m.chainLen()-1:
+			m.switchToChain(m.chainIdx + 1)
+			m.row = 0
+			m.col = 0
+			m.normalizeCursor()
 		}
 	case key.Matches(msg, detailKeys.Enter):
 		if m.onButton() {
@@ -947,10 +1095,13 @@ func (m detailModel) rawArgv() []string {
 }
 
 func (m detailModel) rawCommandTokens() []string {
-	return append(envTokens(m.rows, true), m.rawArgv()...)
+	return m.buildLiveInvocation().RawCommandTokens()
 }
 
 func (m detailModel) copyCommand() string {
+	if m.chainLen() > 1 {
+		return m.buildLiveInvocation().FullCommand()
+	}
 	parts := append(envTokens(m.rows, false), append([]string{m.CurrentCommand()}, mergedTokens(m.rows, false)...)...)
 	if s := m.CurrentStdout().StdoutShell(); s != "" {
 		parts = append(parts, s)
@@ -993,6 +1144,64 @@ func (m detailModel) liveCommand() string {
 	return strings.Join(parts, " ")
 }
 
+// staticSegmentCommand renders a chain segment's command string from rows
+// (without live editing state).
+func staticSegmentCommand(rows []displayRow, fallbackCmd string) string {
+	parts := append(envTokens(rows, true), append([]string{rowsCommand(rows, fallbackCmd)}, mergedTokens(rows, true)...)...)
+	for _, dr := range rows {
+		if dr.kind != rowRedirect {
+			continue
+		}
+		if dr.name == "stdout" {
+			if s := dr.redirect.StdoutShell(); s != "" {
+				parts = append(parts, s)
+			}
+		} else {
+			if s := dr.redirect.StderrShell(); s != "" {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// liveChainPreview renders the full chain command with styling: the current
+// segment is pink (headerStyle), others are dimmed, operators are colored.
+func (m detailModel) liveChainPreview() string {
+	allRows := m.allSegmentRows()
+	segs := m.inv.AllSegments()
+	var sb strings.Builder
+	for i, rows := range allRows {
+		fallbackCmd := ""
+		if i < len(segs) {
+			fallbackCmd = segs[i].Command
+		}
+		var cmdStr string
+		if i == m.chainIdx {
+			cmdStr = m.liveCommand()
+		} else {
+			cmdStr = staticSegmentCommand(rows, fallbackCmd)
+		}
+		if i > 0 && i < len(segs) {
+			op := segs[i].Op
+			switch op {
+			case domain.ChainAnd:
+				sb.WriteString(" " + chainAndStyle.Render("&&") + " ")
+			case domain.ChainPipe:
+				sb.WriteString(" " + chainPipeStyle.Render("|") + " ")
+			default:
+				sb.WriteString(" ")
+			}
+		}
+		if i == m.chainIdx {
+			sb.WriteString(headerStyle.Render(cmdStr))
+		} else {
+			sb.WriteString(chainDimStyle.Render(cmdStr))
+		}
+	}
+	return sb.String()
+}
+
 func envHint(value string, env []string) string {
 	if !strings.Contains(value, "$") && !strings.HasPrefix(value, "~") {
 		return ""
@@ -1008,9 +1217,13 @@ func (m detailModel) View() string {
 	var b strings.Builder
 
 	b.WriteString(titleStyle.Render(kliTitle) + "\n")
-	maxW := m.width - 4
-	for _, l := range wrapText(m.liveCommand(), maxW) {
-		b.WriteString(headerStyle.Render("  "+l) + "\n")
+	if m.chainLen() > 1 {
+		b.WriteString("  " + m.liveChainPreview() + "\n")
+	} else {
+		maxW := m.width - 4
+		for _, l := range wrapText(m.liveCommand(), maxW) {
+			b.WriteString(headerStyle.Render("  "+l) + "\n")
+		}
 	}
 	last := m.inv.LastRun()
 	b.WriteString(hintStyle.Render(fmt.Sprintf("  %s  •  %s", last.RunAt.Format("02/01/2006 15:04:05"), last.Cwd)) + "\n\n")
