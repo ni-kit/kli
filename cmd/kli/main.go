@@ -274,7 +274,7 @@ func latestOptions(args []string, short, long string, action latestAction, confi
 }
 
 func confirmAction(inv *domain.Invocation, action latestAction) (bool, error) {
-	fmt.Println("$", strings.Join(inv.RawCommandTokens(), " "))
+	fmt.Println("$", inv.FullCommand())
 	prompt := "Open in TUI? [y/N]: "
 	if action == latestExec {
 		prompt = "Execute? [y/N]: "
@@ -316,24 +316,15 @@ func runApp(app *tui.App, historySvc service.HistoryService) {
 // final command. Chains are handled natively without involving a shell.
 func execInvocation(inv domain.Invocation) {
 	if !inv.IsChain() {
-		execSingle(inv.ExpandedArgv(), inv.ExpandedEnv(), inv.Stdout, inv.Stderr)
+		execSingle(inv.FullCommand(), inv.ExpandedArgv(), inv.ExpandedEnv(), inv.Stdout, inv.Stderr)
 		return
 	}
 	execNativeChain(inv)
 }
 
 // execSingle prints a preview and replaces the current process via syscall.Exec.
-func execSingle(argv, env []string, stdout, stderr domain.StreamRedirect) {
-	var preview []string
-	preview = append(preview, env...)
-	preview = append(preview, argv...)
-	if s := stdout.StdoutShell(); s != "" {
-		preview = append(preview, s)
-	}
-	if s := stderr.StderrShell(); s != "" {
-		preview = append(preview, s)
-	}
-	fmt.Println("$", strings.Join(preview, " "))
+func execSingle(display string, argv, env []string, stdout, stderr domain.StreamRedirect) {
+	fmt.Println("$", display)
 
 	bin, err := exec.LookPath(argv[0])
 	if err != nil {
@@ -405,7 +396,7 @@ func execLastPipeGroup(segs []domain.ChainLink) {
 	if len(segs) == 1 {
 		seg := segs[0]
 		argv, env := segExpandedArgvEnv(seg)
-		execSingle(argv, env, seg.Stdout, seg.Stderr)
+		execSingle(seg.DisplayCommand(), argv, env, seg.Stdout, seg.Stderr)
 		return // unreachable — execSingle never returns
 	}
 

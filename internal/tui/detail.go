@@ -1262,7 +1262,7 @@ func (m detailModel) liveCommand() string {
 			rows[m.row].value = m.input.Value()
 		}
 	}
-	parts := append(envTokens(rows, true), append([]string{rowsCommand(rows, m.inv.Command)}, mergedTokens(rows, true)...)...)
+	parts := append(envTokens(rows, false), append([]string{rowsCommand(rows, m.inv.Command)}, mergedTokens(rows, false)...)...)
 	for _, dr := range rows {
 		if dr.kind != rowRedirect {
 			continue
@@ -1283,7 +1283,7 @@ func (m detailModel) liveCommand() string {
 // staticSegmentCommand renders a chain segment's command string from rows
 // (without live editing state).
 func staticSegmentCommand(rows []displayRow, fallbackCmd string) string {
-	parts := append(envTokens(rows, true), append([]string{rowsCommand(rows, fallbackCmd)}, mergedTokens(rows, true)...)...)
+	parts := append(envTokens(rows, false), append([]string{rowsCommand(rows, fallbackCmd)}, mergedTokens(rows, false)...)...)
 	for _, dr := range rows {
 		if dr.kind != rowRedirect {
 			continue

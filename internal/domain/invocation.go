@@ -63,6 +63,12 @@ func (inv *Invocation) AddRun(r Run) {
 // IsChain reports whether this invocation consists of multiple chained commands.
 func (inv Invocation) IsChain() bool { return len(inv.Chain) > 0 }
 
+// DisplayCommand returns a human-readable representation of the segment with
+// secrets masked (values marked Redacted are shown as ••••).
+func (l ChainLink) DisplayCommand() string {
+	return strings.Join(segmentDisplayParts(l.Command, l.Env, l.Args, l.Stdout, l.Stderr), " ")
+}
+
 // AllSegments returns every segment of the invocation as a flat slice.
 // Segment 0 is the main command (Op is empty); subsequent segments carry their
 // connecting operator (ChainAnd or ChainPipe).
