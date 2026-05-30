@@ -138,4 +138,4 @@ Redirect operators in shell history (`>file`, `>>file`, `2>&1`, `2>/dev/null`, e
 - [ ] support && and |
 - [ ] add step result preview (one liner builder)
 - [ ] add tldr support
-- [ ] show exit code in history
+- [ ] capture stdout & stderr merged into internal file into history; show exit code in history
