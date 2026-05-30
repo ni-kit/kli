@@ -6,6 +6,73 @@ import (
 	"github.com/ni-kit/kli/internal/domain"
 )
 
+func TestExtractRedirects(t *testing.T) {
+	tests := []struct {
+		name          string
+		tokens        []string
+		wantRemaining []string
+		wantStdout    domain.StreamRedirect
+		wantStderr    domain.StreamRedirect
+	}{
+		{
+			name:          "2>&1 and append stdout",
+			tokens:        []string{"test", "2>&1", ">>filename.txt"},
+			wantRemaining: []string{"test"},
+			wantStdout:    domain.StreamRedirect{Target: domain.RedirectFile, File: "filename.txt", Append: true},
+			wantStderr:    domain.StreamRedirect{Target: domain.RedirectToOther},
+		},
+		{
+			name:          "stdout to file overwrite",
+			tokens:        []string{"arg", ">out.txt"},
+			wantRemaining: []string{"arg"},
+			wantStdout:    domain.StreamRedirect{Target: domain.RedirectFile, File: "out.txt"},
+		},
+		{
+			name:          "stderr to file two-token form",
+			tokens:        []string{"2>", "err.log"},
+			wantRemaining: nil,
+			wantStderr:    domain.StreamRedirect{Target: domain.RedirectFile, File: "err.log"},
+		},
+		{
+			name:          "stdout to null",
+			tokens:        []string{">/dev/null"},
+			wantRemaining: nil,
+			wantStdout:    domain.StreamRedirect{Target: domain.RedirectNull},
+		},
+		{
+			name:          "stdout to stderr",
+			tokens:        []string{">&2"},
+			wantRemaining: nil,
+			wantStdout:    domain.StreamRedirect{Target: domain.RedirectToOther},
+		},
+		{
+			name:          "no redirects",
+			tokens:        []string{"--flag", "value"},
+			wantRemaining: []string{"--flag", "value"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			remaining, stdout, stderr := extractRedirects(tc.tokens)
+			if len(remaining) != len(tc.wantRemaining) {
+				t.Fatalf("remaining: got %v, want %v", remaining, tc.wantRemaining)
+			}
+			for i, r := range remaining {
+				if r != tc.wantRemaining[i] {
+					t.Errorf("remaining[%d]: got %q, want %q", i, r, tc.wantRemaining[i])
+				}
+			}
+			if stdout != tc.wantStdout {
+				t.Errorf("stdout: got %+v, want %+v", stdout, tc.wantStdout)
+			}
+			if stderr != tc.wantStderr {
+				t.Errorf("stderr: got %+v, want %+v", stderr, tc.wantStderr)
+			}
+		})
+	}
+}
+
 func TestParse(t *testing.T) {
 	type wantArg struct {
 		kind  domain.ArgKind

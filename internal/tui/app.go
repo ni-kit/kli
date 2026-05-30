@@ -27,6 +27,8 @@ type App struct {
 	height         int
 	histExecArgv   []string
 	histExecEnv    []string
+	histExecStdout domain.StreamRedirect
+	histExecStderr domain.StreamRedirect
 	histRecordArgv []string
 	initialSearch  string
 	startOnDetail  *domain.Invocation // non-nil → open detail screen immediately
@@ -111,6 +113,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if inv != nil {
 					a.histExecArgv = inv.ExpandedArgv()
 					a.histExecEnv = inv.ExpandedEnv()
+					a.histExecStdout = inv.Stdout
+					a.histExecStderr = inv.Stderr
 					a.histRecordArgv = inv.RawCommandTokens()
 					return a, tea.Quit
 				}
@@ -193,12 +197,28 @@ func (a *App) ExecEnv() []string {
 	return a.detail.ExecEnv()
 }
 
+func (a *App) ExecStdout() domain.StreamRedirect {
+	if len(a.histExecArgv) > 0 {
+		return a.histExecStdout
+	}
+	return a.detail.CurrentStdout()
+}
+
+func (a *App) ExecStderr() domain.StreamRedirect {
+	if len(a.histExecArgv) > 0 {
+		return a.histExecStderr
+	}
+	return a.detail.CurrentStderr()
+}
+
 func (a *App) saveDetail() {
 	orig := a.detail.OriginalInvocation()
 	updated := domain.Invocation{
 		Command: a.detail.CurrentCommand(),
 		Env:     a.detail.CurrentEnv(),
 		Args:    a.detail.CurrentArgs(),
+		Stdout:  a.detail.CurrentStdout(),
+		Stderr:  a.detail.CurrentStderr(),
 		Runs:    []domain.Run{orig.LastRun()},
 	}
 	_ = a.historySvc.SaveEdited(orig, updated)

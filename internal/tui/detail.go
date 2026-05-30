@@ -40,6 +40,12 @@ var (
 	runBtnNormal  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	runBtnFocused = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("34")).Padding(0, 2)
 
+	redirectLabelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	redirectDefaultStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	redirectActiveStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
+	redirectFileStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
+	redirectMissingStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")).Background(lipgloss.Color("196"))
+
 	detailKeys = detailKeyMap{
 		Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
 		Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
@@ -72,6 +78,7 @@ const (
 	rowArg displayRowKind = iota
 	rowEnv
 	rowCommand
+	rowRedirect
 )
 
 type detailMode int
@@ -108,8 +115,9 @@ type displayRow struct {
 	kind     displayRowKind
 	name     string
 	value    string
-	disabled bool // excluded from exec and copy
-	secret   bool // value passed to exec but shown as •••• in copy
+	disabled bool                  // excluded from exec and copy
+	secret   bool                  // value passed to exec but shown as •••• in copy
+	redirect domain.StreamRedirect // used only for rowRedirect rows
 }
 
 func buildEnvRows(env []domain.EnvVar) []displayRow {
@@ -265,6 +273,15 @@ type detailModel struct {
 	helpVisible   bool
 }
 
+func (m detailModel) canExec() bool {
+	for _, dr := range m.rows {
+		if dr.kind == rowRedirect && dr.redirect.Target == domain.RedirectFile && dr.redirect.File == "" {
+			return false
+		}
+	}
+	return true
+}
+
 func (m detailModel) ExecRequested() bool                   { return m.execRequested }
 func (m detailModel) SaveRequested() bool                   { return m.saved }
 func (m detailModel) ExecArgv() []string                    { return m.liveArgv() }
@@ -274,14 +291,28 @@ func (m detailModel) OriginalInvocation() domain.Invocation { return m.inv }
 func (m detailModel) CurrentCommand() string                { return rowsCommand(m.rows, m.inv.Command) }
 func (m detailModel) CurrentEnv() []domain.EnvVar           { return rowsToEnv(m.rows) }
 func (m detailModel) CurrentArgs() []domain.Arg             { return rowsToArgs(m.rows) }
-func (m detailModel) onButton() bool                        { return m.row == len(m.rows) }
+func (m detailModel) CurrentStdout() domain.StreamRedirect  { return m.currentRedirect("stdout") }
+func (m detailModel) CurrentStderr() domain.StreamRedirect  { return m.currentRedirect("stderr") }
+
+func (m detailModel) currentRedirect(name string) domain.StreamRedirect {
+	for _, dr := range m.rows {
+		if dr.kind == rowRedirect && dr.name == name {
+			return dr.redirect
+		}
+	}
+	return domain.StreamRedirect{}
+}
+func (m detailModel) onButton() bool { return m.row == len(m.rows) }
 
 func (m detailModel) onCommandRow() bool {
 	return !m.onButton() && m.rows[m.row].kind == rowCommand
 }
 
 func (m *detailModel) normalizeCursor() {
-	if m.onCommandRow() {
+	if m.onButton() {
+		return
+	}
+	if m.rows[m.row].kind == rowCommand || m.rows[m.row].kind == rowRedirect {
 		m.col = 1
 	}
 }
@@ -289,12 +320,31 @@ func (m *detailModel) normalizeCursor() {
 func newDetailModel(inv domain.Invocation, width int) detailModel {
 	ti := textinput.New()
 	ti.CharLimit = 256
+	rows := append(append(buildEnvRows(inv.Env), buildCommandRow(inv.Command)), buildRows(inv.Args)...)
+	rows = append(rows, buildRedirectRows(inv.Stdout, inv.Stderr)...)
 	return detailModel{
 		inv:   inv,
 		width: width,
-		rows:  append(append(buildEnvRows(inv.Env), buildCommandRow(inv.Command)), buildRows(inv.Args)...),
+		rows:  rows,
 		input: ti,
 	}
+}
+
+func buildRedirectRows(stdout, stderr domain.StreamRedirect) []displayRow {
+	return []displayRow{
+		{kind: rowRedirect, name: "stdout", redirect: stdout},
+		{kind: rowRedirect, name: "stderr", redirect: stderr},
+	}
+}
+
+func parseFileRedirectInput(s string) (file string, append bool) {
+	if strings.HasPrefix(s, ">>") {
+		return strings.TrimSpace(s[2:]), true
+	}
+	if strings.HasPrefix(s, ">") {
+		return strings.TrimSpace(s[1:]), false
+	}
+	return strings.TrimSpace(s), false
 }
 
 func (m detailModel) IsEditing() bool { return m.mode == modeEditing }
@@ -375,27 +425,49 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		}
 	case key.Matches(msg, detailKeys.Enter):
 		if m.onButton() {
-			m.execRequested = true
-			return m, tea.Quit
+			if m.canExec() {
+				m.execRequested = true
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+		if m.rows[m.row].kind == rowRedirect {
+			if m.rows[m.row].redirect.Target == domain.RedirectFile {
+				return m.startEditing(m.currentCell())
+			}
+			m.rows[m.row].redirect = m.rows[m.row].redirect.Next()
+			return m, nil
 		}
 		return m.startEditing(m.currentCell())
 	case key.Matches(msg, detailKeys.Insert):
 		if !m.onButton() {
+			if m.rows[m.row].kind == rowRedirect {
+				if m.rows[m.row].redirect.Target == domain.RedirectFile {
+					return m.startEditing(m.currentCell())
+				}
+				m.rows[m.row].redirect = m.rows[m.row].redirect.Next()
+				return m, nil
+			}
 			return m.startEditing(m.currentCell())
 		}
 	case key.Matches(msg, detailKeys.X):
-		m.execRequested = true
-		return m, tea.Quit
+		if m.canExec() {
+			m.execRequested = true
+			return m, tea.Quit
+		}
+		return m, nil
 	case key.Matches(msg, detailKeys.C):
 		if !m.onButton() {
 			m.cArmed = true
 		}
 	case key.Matches(msg, detailKeys.ToggleRow):
-		if !m.onButton() && !m.onCommandRow() {
+		if !m.onButton() && m.rows[m.row].kind == rowRedirect {
+			m.rows[m.row].redirect = m.rows[m.row].redirect.Next()
+		} else if !m.onButton() && !m.onCommandRow() {
 			m.rows[m.row].disabled = !m.rows[m.row].disabled
 		}
 	case key.Matches(msg, detailKeys.ToggleValue):
-		if !m.onButton() && !m.onCommandRow() {
+		if !m.onButton() && !m.onCommandRow() && m.rows[m.row].kind != rowRedirect {
 			m.rows[m.row].secret = !m.rows[m.row].secret
 		}
 	case key.Matches(msg, detailKeys.Save):
@@ -425,11 +497,11 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			}
 		}
 	case key.Matches(msg, detailKeys.D):
-		if !m.onButton() && !m.onCommandRow() {
+		if !m.onButton() && !m.onCommandRow() && m.rows[m.row].kind != rowRedirect {
 			m.dArmed = true
 		}
 	case key.Matches(msg, detailKeys.AddRow):
-		if !m.onButton() && !m.onCommandRow() {
+		if !m.onButton() && !m.onCommandRow() && m.rows[m.row].kind != rowRedirect {
 			snapshot := make([]displayRow, len(m.rows))
 			copy(snapshot, m.rows)
 			insertAt := m.row + 1
@@ -452,12 +524,8 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 				m.rows = m.undo.rows
 				m.row = m.undo.rowPos
 			} else {
-				if m.undo.col == 0 {
-					m.rows[m.undo.row].name = m.undo.value
-				} else {
-					m.rows[m.undo.row].value = m.undo.value
-				}
 				m.row, m.col = m.undo.row, m.undo.col
+				m.setCell(m.undo.value)
 			}
 			m.normalizeCursor()
 			m.undo = nil
@@ -467,6 +535,16 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 }
 
 func (m detailModel) currentCell() string {
+	if m.onButton() {
+		return ""
+	}
+	if m.rows[m.row].kind == rowRedirect {
+		r := m.rows[m.row].redirect
+		if r.Append {
+			return ">>" + r.File
+		}
+		return ">" + r.File
+	}
 	if m.onCommandRow() {
 		return m.rows[m.row].value
 	}
@@ -477,6 +555,15 @@ func (m detailModel) currentCell() string {
 }
 
 func (m *detailModel) setCell(s string) {
+	if m.onButton() {
+		return
+	}
+	if m.rows[m.row].kind == rowRedirect {
+		file, app := parseFileRedirectInput(s)
+		m.rows[m.row].redirect.File = file
+		m.rows[m.row].redirect.Append = app
+		return
+	}
 	if m.onCommandRow() {
 		m.rows[m.row].value = s
 		return
@@ -716,20 +803,46 @@ func (m detailModel) rawCommandTokens() []string {
 }
 
 func (m detailModel) copyCommand() string {
-	return strings.Join(append(envTokens(m.rows, false), append([]string{m.CurrentCommand()}, mergedTokens(m.rows, false)...)...), " ")
+	parts := append(envTokens(m.rows, false), append([]string{m.CurrentCommand()}, mergedTokens(m.rows, false)...)...)
+	if s := m.CurrentStdout().StdoutShell(); s != "" {
+		parts = append(parts, s)
+	}
+	if s := m.CurrentStderr().StderrShell(); s != "" {
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m detailModel) liveCommand() string {
 	rows := make([]displayRow, len(m.rows))
 	copy(rows, m.rows)
 	if m.mode == modeEditing && !m.onButton() {
-		if m.col == 0 {
+		if rows[m.row].kind == rowRedirect {
+			file, app := parseFileRedirectInput(m.input.Value())
+			rows[m.row].redirect.File = file
+			rows[m.row].redirect.Append = app
+		} else if m.col == 0 {
 			rows[m.row].name = m.input.Value()
 		} else {
 			rows[m.row].value = m.input.Value()
 		}
 	}
-	return strings.Join(append(envTokens(rows, true), append([]string{rowsCommand(rows, m.inv.Command)}, mergedTokens(rows, true)...)...), " ")
+	parts := append(envTokens(rows, true), append([]string{rowsCommand(rows, m.inv.Command)}, mergedTokens(rows, true)...)...)
+	for _, dr := range rows {
+		if dr.kind != rowRedirect {
+			continue
+		}
+		if dr.name == "stdout" {
+			if s := dr.redirect.StdoutShell(); s != "" {
+				parts = append(parts, s)
+			}
+		} else {
+			if s := dr.redirect.StderrShell(); s != "" {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func envHint(value string, env []string) string {
@@ -790,6 +903,19 @@ func (m detailModel) View() string {
 	}
 
 	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("  %s  %s\n",
+		cellHeader.Render(padStr("stream", colNameW)),
+		cellHeader.Render(padStr("redirect to", colValueW)),
+	))
+	b.WriteString("  " + sectionStyle.Render(strings.Repeat("─", colNameW+colValueW+4)) + "\n")
+	for r, dr := range m.rows {
+		if dr.kind != rowRedirect {
+			continue
+		}
+		b.WriteString(m.renderRedirectRow(r, dr) + "\n")
+	}
+
+	b.WriteString("\n")
 	btnStyle := runBtnNormal
 	if m.onButton() {
 		btnStyle = runBtnFocused
@@ -822,6 +948,60 @@ func (m detailModel) View() string {
 	}
 
 	return b.String()
+}
+
+func (m detailModel) renderRedirectRow(r int, dr displayRow) string {
+	isActive := r == m.row && !m.onButton()
+	isStdout := dr.name == "stdout"
+	label := padStr(dr.name, colNameW)
+
+	fileMissing := dr.redirect.Target == domain.RedirectFile && dr.redirect.File == ""
+
+	var valText string
+	if isActive && m.mode == modeEditing {
+		valText = m.input.View()
+	} else if dr.redirect.Target == domain.RedirectFile {
+		prefix := ">"
+		if dr.redirect.Append {
+			prefix = ">>"
+		}
+		if fileMissing {
+			valText = padStr(prefix+" <enter file name>", colValueW)
+		} else {
+			valText = padStr(prefix+dr.redirect.File, colValueW)
+		}
+	} else {
+		valText = padStr(dr.redirect.CarouselLabel(isStdout), colValueW)
+	}
+
+	if isActive {
+		nameCell := redirectLabelStyle.Render(label)
+		var valCell string
+		if fileMissing && m.mode != modeEditing {
+			valCell = redirectMissingStyle.Render(valText)
+		} else {
+			valCell = cellSelected.Render(valText)
+		}
+		return rowActiveStyle.Render(fmt.Sprintf("  %s  %s", nameCell, valCell))
+	}
+
+	nameCell := redirectLabelStyle.Render(label)
+	var valCell string
+	switch dr.redirect.Target {
+	case domain.RedirectDefault:
+		valCell = redirectDefaultStyle.Render(valText)
+	case domain.RedirectToOther:
+		valCell = redirectActiveStyle.Render(valText)
+	case domain.RedirectNull:
+		valCell = cellDisabled.Render(valText)
+	case domain.RedirectFile:
+		if fileMissing {
+			valCell = redirectMissingStyle.Render(valText)
+		} else {
+			valCell = redirectFileStyle.Render(valText)
+		}
+	}
+	return fmt.Sprintf("  %s  %s", nameCell, valCell)
 }
 
 func (m detailModel) renderRow(r int, dr displayRow, env []string) string {
@@ -909,7 +1089,7 @@ func (m detailModel) renderCommandRow(r int, dr displayRow) string {
 		text = padStr(dr.value, width)
 	}
 
-	cell := cellValue.Render(text)
+	cell := headerStyle.Render(text)
 	if isActive {
 		cell = cellSelected.Render(text)
 	}

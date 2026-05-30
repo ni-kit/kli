@@ -19,6 +19,8 @@ type Invocation struct {
 	Args    []Arg
 	Runs    []Run // newest-first
 	Tags    []string
+	Stdout  StreamRedirect
+	Stderr  StreamRedirect
 }
 
 type EnvVar struct {
@@ -55,13 +57,19 @@ func (inv Invocation) ArgsPreview() string {
 }
 
 func (inv Invocation) FullCommand() string {
-	parts := make([]string, 0, len(inv.Env)+1+len(inv.Args))
+	parts := make([]string, 0, len(inv.Env)+1+len(inv.Args)+2)
 	for _, e := range inv.Env {
 		parts = append(parts, e.Display())
 	}
 	parts = append(parts, inv.Command)
 	for _, a := range inv.Args {
 		parts = append(parts, a.Display())
+	}
+	if s := inv.Stdout.StdoutShell(); s != "" {
+		parts = append(parts, s)
+	}
+	if s := inv.Stderr.StderrShell(); s != "" {
+		parts = append(parts, s)
 	}
 	return strings.Join(parts, " ")
 }
@@ -211,7 +219,7 @@ func (inv Invocation) CommandFingerprint() string {
 	}
 	slices.Sort(env)
 	slices.Sort(flags)
-	return strings.Join(env, ",") + "|" + inv.Command + "|" + strings.Join(flags, ",") + "|" + strings.Join(positionals, ",")
+	return strings.Join(env, ",") + "|" + inv.Command + "|" + strings.Join(flags, ",") + "|" + strings.Join(positionals, ",") + "|" + inv.Stdout.StdoutShell() + "|" + inv.Stderr.StderrShell()
 }
 
 func (inv Invocation) FlagSetFingerprint() string {

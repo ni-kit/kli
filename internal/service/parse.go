@@ -16,14 +16,16 @@ func Parse(argv []string) domain.Invocation {
 
 func parseWithTime(argv []string, t time.Time, cwd string) domain.Invocation {
 	env, argv := splitLeadingEnv(argv)
+	tokens, stdout, stderr := extractRedirects(argv[1:])
 	inv := domain.Invocation{
 		ID:      newID(),
 		Command: argv[0],
 		Env:     env,
+		Stdout:  stdout,
+		Stderr:  stderr,
 		Runs:    []domain.Run{{RunAt: t, Cwd: cwd}},
 	}
 
-	tokens := argv[1:]
 	for i := 0; i < len(tokens); i++ {
 		tok := tokens[i]
 		switch {
@@ -85,4 +87,98 @@ func isEnvKey(s string) bool {
 
 func newID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// extractRedirects scans tokens for shell redirect operators, removes them from
+// the list, and returns the cleaned tokens plus stdout/stderr redirect config.
+func extractRedirects(tokens []string) (remaining []string, stdout, stderr domain.StreamRedirect) {
+	i := 0
+	for i < len(tokens) {
+		tok := tokens[i]
+
+		switch tok {
+		case "2>&1":
+			stderr = domain.StreamRedirect{Target: domain.RedirectToOther}
+			i++
+			continue
+		case ">&2", "1>&2":
+			stdout = domain.StreamRedirect{Target: domain.RedirectToOther}
+			i++
+			continue
+		}
+
+		// Two-token operators: ">" "file", ">>" "file", "2>" "file", etc.
+		if op, isStdout, ok := standaloneRedirectOp(tok); ok && i+1 < len(tokens) {
+			r := fileOrNullRedirect(tokens[i+1], op.append)
+			if isStdout {
+				stdout = r
+			} else {
+				stderr = r
+			}
+			i += 2
+			continue
+		}
+
+		// Single-token with embedded target: ">file", ">>file", "2>file", etc.
+		if fd, r, ok := parseSingleRedirectToken(tok); ok {
+			if fd == 1 {
+				stdout = r
+			} else {
+				stderr = r
+			}
+			i++
+			continue
+		}
+
+		remaining = append(remaining, tok)
+		i++
+	}
+	return
+}
+
+type redirectOpSpec struct{ append bool }
+
+func standaloneRedirectOp(tok string) (spec redirectOpSpec, isStdout bool, ok bool) {
+	switch tok {
+	case ">", "1>":
+		return redirectOpSpec{false}, true, true
+	case ">>", "1>>":
+		return redirectOpSpec{true}, true, true
+	case "2>":
+		return redirectOpSpec{false}, false, true
+	case "2>>":
+		return redirectOpSpec{true}, false, true
+	}
+	return redirectOpSpec{}, false, false
+}
+
+// parseSingleRedirectToken handles tokens with the operator and target merged,
+// e.g. ">file", ">>file", "2>file", ">/dev/null". Returns fd (1 or 2).
+func parseSingleRedirectToken(tok string) (fd int, r domain.StreamRedirect, ok bool) {
+	type pfx struct {
+		s      string
+		fd     int
+		append bool
+	}
+	// Longer prefixes must be checked first to avoid ">>" matching as ">".
+	for _, p := range []pfx{
+		{"1>>", 1, true}, {"2>>", 2, true}, {">>", 1, true},
+		{"1>", 1, false}, {"2>", 2, false}, {">", 1, false},
+	} {
+		if strings.HasPrefix(tok, p.s) {
+			target := tok[len(p.s):]
+			if target == "" || target == "&1" || target == "&2" {
+				return 0, domain.StreamRedirect{}, false
+			}
+			return p.fd, fileOrNullRedirect(target, p.append), true
+		}
+	}
+	return 0, domain.StreamRedirect{}, false
+}
+
+func fileOrNullRedirect(target string, append bool) domain.StreamRedirect {
+	if target == "/dev/null" {
+		return domain.StreamRedirect{Target: domain.RedirectNull}
+	}
+	return domain.StreamRedirect{Target: domain.RedirectFile, File: target, Append: append}
 }

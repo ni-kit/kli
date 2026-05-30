@@ -16,6 +16,45 @@ import (
 	"github.com/ni-kit/kli/internal/tui"
 )
 
+func applyRedirects(stdout, stderr domain.StreamRedirect) error {
+	if err := applyStreamRedirect(1, stdout); err != nil {
+		return err
+	}
+	return applyStreamRedirect(2, stderr)
+}
+
+func applyStreamRedirect(fd int, r domain.StreamRedirect) error {
+	switch r.Target {
+	case domain.RedirectDefault:
+		return nil
+	case domain.RedirectToOther:
+		src := 2
+		if fd == 2 {
+			src = 1
+		}
+		return syscall.Dup2(src, fd)
+	case domain.RedirectNull:
+		f, err := os.OpenFile("/dev/null", os.O_WRONLY, 0)
+		if err != nil {
+			return err
+		}
+		return syscall.Dup2(int(f.Fd()), fd)
+	case domain.RedirectFile:
+		flags := os.O_WRONLY | os.O_CREATE
+		if r.Append {
+			flags |= os.O_APPEND
+		} else {
+			flags |= os.O_TRUNC
+		}
+		f, err := os.OpenFile(r.File, flags, 0o644)
+		if err != nil {
+			return err
+		}
+		return syscall.Dup2(int(f.Fd()), fd)
+	}
+	return nil
+}
+
 type latestAction int
 
 const (
@@ -62,7 +101,7 @@ func main() {
 		if err := historySvc.Record(inv); err != nil {
 			fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 		}
-		execArgv(inv.ExpandedArgv(), inv.ExpandedEnv())
+		execArgv(inv.ExpandedArgv(), inv.ExpandedEnv(), inv.Stdout, inv.Stderr)
 	}
 
 	if len(opts.recordArgv) > 0 {
@@ -113,7 +152,7 @@ func main() {
 			if err := historySvc.Record(service.Parse(rawTokens)); err != nil {
 				fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 			}
-			execArgv(inv.ExpandedArgv(), inv.ExpandedEnv())
+			execArgv(inv.ExpandedArgv(), inv.ExpandedEnv(), inv.Stdout, inv.Stderr)
 		}
 
 		runApp(tui.NewAppOnDetail(*inv, invocations, historySvc), historySvc)
@@ -211,21 +250,38 @@ func runApp(app *tui.App, historySvc service.HistoryService) {
 	if app.ExecRequested() {
 		argv := app.ExecArgv()
 		env := app.ExecEnv()
+		stdout := app.ExecStdout()
+		stderr := app.ExecStderr()
 		executed := service.Parse(app.RecordArgv())
+		executed.Stdout = stdout
+		executed.Stderr = stderr
 		if err := historySvc.Record(executed); err != nil {
 			fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 		}
 
-		execArgv(argv, env)
+		execArgv(argv, env, stdout, stderr)
 	}
 }
 
-func execArgv(argv []string, env []string) {
-	fmt.Println("$", strings.Join(append(env, argv...), " "))
+func execArgv(argv []string, env []string, stdout, stderr domain.StreamRedirect) {
+	var preview []string
+	preview = append(preview, env...)
+	preview = append(preview, argv...)
+	if s := stdout.StdoutShell(); s != "" {
+		preview = append(preview, s)
+	}
+	if s := stderr.StderrShell(); s != "" {
+		preview = append(preview, s)
+	}
+	fmt.Println("$", strings.Join(preview, " "))
 
 	bin, err := exec.LookPath(argv[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "kli: command not found:", argv[0])
+		os.Exit(1)
+	}
+	if err := applyRedirects(stdout, stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "kli: redirect failed:", err)
 		os.Exit(1)
 	}
 	if err := syscall.Exec(bin, argv, mergedEnv(os.Environ(), env)); err != nil {
