@@ -20,7 +20,32 @@ type invItem struct {
 }
 
 func (i invItem) Title() string {
-	return fmt.Sprintf("%s%-10s  %s%s", envDot(i.inv), i.inv.Command, i.inv.ArgsPreview(), renderTags(i.inv.Tags))
+	return fmt.Sprintf("%s%-10s  %s%s%s",
+		envDot(i.inv),
+		i.inv.Command,
+		i.inv.ArgsPreview(),
+		chainListSummary(i.inv.Chain),
+		renderTags(i.inv.Tags),
+	)
+}
+
+func chainListSummary(chain []domain.ChainLink) string {
+	if len(chain) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, link := range chain {
+		sb.WriteString("  ")
+		switch link.Op {
+		case domain.ChainAnd:
+			sb.WriteString(chainAndStyle.Render("&&"))
+		case domain.ChainPipe:
+			sb.WriteString(chainPipeStyle.Render("|"))
+		}
+		sb.WriteString(" ")
+		sb.WriteString(chainDimStyle.Render(link.Command))
+	}
+	return sb.String()
 }
 
 func (i invItem) Description() string {
@@ -147,6 +172,9 @@ func newHistoryModel(invocations []domain.Invocation, width, height int, initial
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(false) // we do filtering ourselves
 	l.KeyMap = historyKeyMap()
+	l.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{histKeys.New}
+	}
 
 	si := textinput.New()
 	si.Placeholder = "search… (C:cmd F:flag V:val P:path T:tag D:date R:asc/desc)"

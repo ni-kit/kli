@@ -495,15 +495,18 @@ func (m detailModel) isCurrentSegmentEmpty() bool {
 	return rowsCommand(m.rows, fallback) == ""
 }
 
-// createChainLink commits the current edit, inserts a new empty chain segment
-// immediately after the current one with the given operator, and opens its
-// command row for editing.
+// createChainLink inserts a new empty chain segment immediately after the
+// current one with the given operator and opens its command row for editing.
+// When called from edit mode it first commits the active cell; when called
+// from normal mode the commit step is skipped.
 func (m detailModel) createChainLink(op domain.ChainOp) (detailModel, tea.Cmd) {
-	// Commit the live cell value.
-	m.undo = &undoEntry{row: m.row, col: m.col, value: m.currentCell()}
-	m.setCell(m.input.Value())
-	m.input.Blur()
-	m.mode = modeNormal
+	if m.mode == modeEditing {
+		// Commit the live cell value.
+		m.undo = &undoEntry{row: m.row, col: m.col, value: m.currentCell()}
+		m.setCell(m.input.Value())
+		m.input.Blur()
+		m.mode = modeNormal
+	}
 
 	// Save current segment's rows.
 	m.segRows[m.chainIdx] = m.rows
@@ -924,6 +927,14 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		}
 	case key.Matches(msg, detailKeys.Help):
 		m.helpVisible = !m.helpVisible
+	case msg.String() == "&":
+		if m.CurrentCommand() != "" {
+			return m.createChainLink(domain.ChainAnd)
+		}
+	case msg.String() == "|":
+		if m.CurrentCommand() != "" {
+			return m.createChainLink(domain.ChainPipe)
+		}
 	case key.Matches(msg, detailKeys.Undo):
 		if m.undo != nil {
 			if m.undo.rows != nil {
