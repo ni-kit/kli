@@ -135,7 +135,7 @@ Redirect operators in shell history (`>file`, `>>file`, `2>&1`, `2>/dev/null`, e
 
 ## TODO
 
-- [ ] support && and |
 - [ ] add step result preview (one liner builder)
 - [ ] add tldr support
+- [ ] subcmd preview (like env vars)
 - [ ] capture stdout & stderr merged into internal file into history; show exit code in history

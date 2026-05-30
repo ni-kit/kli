@@ -461,6 +461,124 @@ func (m detailModel) buildLiveInvocation() domain.Invocation {
 	return inv
 }
 
+// buildEmptySegmentRows returns a fresh set of display rows for a new chain segment.
+func buildEmptySegmentRows() []displayRow {
+	rows := buildEnvRows(nil)
+	rows = append(rows, buildCommandRow(""))
+	rows = append(rows, buildRows(nil)...)
+	rows = append(rows, buildRedirectRows(domain.StreamRedirect{}, domain.StreamRedirect{})...)
+	return rows
+}
+
+// liveCurrentCommand returns the command for the current chain segment,
+// including any live (uncommitted) text in the input when the command row is active.
+func (m detailModel) liveCurrentCommand() string {
+	if m.mode == modeEditing && m.onCommandRow() {
+		return m.input.Value()
+	}
+	segs := m.inv.AllSegments()
+	fallback := ""
+	if m.chainIdx < len(segs) {
+		fallback = segs[m.chainIdx].Command
+	}
+	return rowsCommand(m.rows, fallback)
+}
+
+// isCurrentSegmentEmpty reports whether the committed command of the current
+// chain segment is empty (used to decide whether to delete it on navigation).
+func (m detailModel) isCurrentSegmentEmpty() bool {
+	segs := m.inv.AllSegments()
+	fallback := ""
+	if m.chainIdx < len(segs) {
+		fallback = segs[m.chainIdx].Command
+	}
+	return rowsCommand(m.rows, fallback) == ""
+}
+
+// createChainLink commits the current edit, inserts a new empty chain segment
+// immediately after the current one with the given operator, and opens its
+// command row for editing.
+func (m detailModel) createChainLink(op domain.ChainOp) (detailModel, tea.Cmd) {
+	// Commit the live cell value.
+	m.undo = &undoEntry{row: m.row, col: m.col, value: m.currentCell()}
+	m.setCell(m.input.Value())
+	m.input.Blur()
+	m.mode = modeNormal
+
+	// Save current segment's rows.
+	m.segRows[m.chainIdx] = m.rows
+
+	newRows := buildEmptySegmentRows()
+	insertAt := m.chainIdx + 1
+
+	// Insert into segRows.
+	newSegRows := make([][]displayRow, 0, len(m.segRows)+1)
+	newSegRows = append(newSegRows, m.segRows[:insertAt]...)
+	newSegRows = append(newSegRows, newRows)
+	newSegRows = append(newSegRows, m.segRows[insertAt:]...)
+	m.segRows = newSegRows
+
+	// Insert a new ChainLink at position chainIdx in inv.Chain.
+	// Chain[i] holds the Op for segment i+1, so a link at chainIdx covers the
+	// new segment at insertAt.
+	newChain := make([]domain.ChainLink, 0, len(m.inv.Chain)+1)
+	newChain = append(newChain, m.inv.Chain[:m.chainIdx]...)
+	newChain = append(newChain, domain.ChainLink{Op: op})
+	newChain = append(newChain, m.inv.Chain[m.chainIdx:]...)
+	m.inv.Chain = newChain
+
+	// Switch to the new segment and open its command row for editing.
+	m.chainIdx = insertAt
+	m.rows = m.segRows[insertAt]
+	m.undo = nil
+
+	for i, dr := range m.rows {
+		if dr.kind == rowCommand {
+			m.row = i
+			m.col = 1
+			return m.startEditing("")
+		}
+	}
+	return m, nil
+}
+
+// deleteSegmentGoLeft removes the current chain segment and moves focus to the
+// previous one. The caller must update m.row/m.col/normalizeCursor afterwards.
+func (m *detailModel) deleteSegmentGoLeft() {
+	idx := m.chainIdx
+	// Remove the segment's rows.
+	m.segRows = append(m.segRows[:idx:idx], m.segRows[idx+1:]...)
+	// Remove the op entry: Chain[idx-1] for idx>0; Chain[0] for idx==0.
+	opIdx := idx - 1
+	if opIdx < 0 {
+		opIdx = 0
+	}
+	if opIdx < len(m.inv.Chain) {
+		m.inv.Chain = append(m.inv.Chain[:opIdx:opIdx], m.inv.Chain[opIdx+1:]...)
+	}
+	m.chainIdx = idx - 1
+	m.rows = m.segRows[m.chainIdx]
+	m.undo = nil
+}
+
+// deleteSegmentGoRight removes the current chain segment and moves focus to the
+// next one (which slides into the current index). Caller updates row/col after.
+func (m *detailModel) deleteSegmentGoRight() {
+	idx := m.chainIdx
+	m.segRows = append(m.segRows[:idx:idx], m.segRows[idx+1:]...)
+	// Remove the op at max(0, idx-1): same formula as deleteSegmentGoLeft.
+	opIdx := idx - 1
+	if opIdx < 0 {
+		opIdx = 0
+	}
+	if opIdx < len(m.inv.Chain) {
+		m.inv.Chain = append(m.inv.Chain[:opIdx:opIdx], m.inv.Chain[opIdx+1:]...)
+	}
+	// chainIdx stays the same; it now points at the old idx+1 content.
+	m.rows = m.segRows[m.chainIdx]
+	m.undo = nil
+}
+
 // lastVisibleRowIdx returns the index of the last row that is visible given
 // the current redirectsVisible setting.
 func (m detailModel) lastVisibleRowIdx() int {
@@ -675,35 +793,33 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		switch {
 		case m.onButton():
 			// nothing
-		case m.onCommandRow() && m.chainIdx > 0:
-			m.switchToChain(m.chainIdx - 1)
+		case (m.onCommandRow() || m.col == 0) && m.chainIdx > 0:
+			if m.isCurrentSegmentEmpty() {
+				m.deleteSegmentGoLeft()
+			} else {
+				m.switchToChain(m.chainIdx - 1)
+			}
 			m.row = m.lastVisibleRowIdx()
 			m.col = numCols - 1
 			m.normalizeCursor()
 		case !m.onCommandRow() && m.col > 0:
 			m.col--
-		case !m.onCommandRow() && m.col == 0 && m.chainIdx > 0:
-			m.switchToChain(m.chainIdx - 1)
-			m.row = m.lastVisibleRowIdx()
-			m.col = numCols - 1
-			m.normalizeCursor()
 		}
 	case key.Matches(msg, detailKeys.Right):
 		switch {
 		case m.onButton():
 			// nothing
-		case m.onCommandRow() && m.chainIdx < m.chainLen()-1:
-			m.switchToChain(m.chainIdx + 1)
+		case (m.onCommandRow() || m.col == numCols-1) && m.chainIdx < m.chainLen()-1:
+			if m.isCurrentSegmentEmpty() {
+				m.deleteSegmentGoRight()
+			} else {
+				m.switchToChain(m.chainIdx + 1)
+			}
 			m.row = 0
 			m.col = 0
 			m.normalizeCursor()
 		case !m.onCommandRow() && m.col < numCols-1:
 			m.col++
-		case !m.onCommandRow() && m.col == numCols-1 && m.chainIdx < m.chainLen()-1:
-			m.switchToChain(m.chainIdx + 1)
-			m.row = 0
-			m.col = 0
-			m.normalizeCursor()
 		}
 	case key.Matches(msg, detailKeys.Enter):
 		if m.onButton() {
@@ -891,6 +1007,15 @@ func (m detailModel) updateEditing(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			m.input.CursorEnd()
 		}
 		return m, nil
+	case "&", "|":
+		// Create a new chain link if the current segment already has a command.
+		if m.liveCurrentCommand() != "" {
+			op := domain.ChainAnd
+			if msg.String() == "|" {
+				op = domain.ChainPipe
+			}
+			return m.createChainLink(op)
+		}
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
