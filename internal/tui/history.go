@@ -19,7 +19,7 @@ type invItem struct {
 }
 
 func (i invItem) Title() string {
-	return fmt.Sprintf("%-10s  %s%s", i.inv.Command, i.inv.ArgsPreview(), renderTags(i.inv.Tags))
+	return fmt.Sprintf("%s%-10s  %s%s", envDot(i.inv), i.inv.Command, i.inv.ArgsPreview(), renderTags(i.inv.Tags))
 }
 
 func (i invItem) Description() string {
@@ -46,6 +46,7 @@ var (
 	searchActive = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
 	searchHelp   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	tagEditStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("178"))
+	envDotStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("178"))
 
 	tagColors = []lipgloss.Style{
 		lipgloss.NewStyle().Foreground(lipgloss.Color("178")), // yellow
@@ -68,6 +69,13 @@ var (
 
 	tagColorMap = map[string]lipgloss.Style{}
 )
+
+func envDot(inv domain.Invocation) string {
+	if len(inv.Env) == 0 {
+		return "  "
+	}
+	return envDotStyle.Render("•") + " "
+}
 
 func buildTagColors(invocations []domain.Invocation) {
 	seen := map[string]struct{}{}

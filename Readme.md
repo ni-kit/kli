@@ -118,5 +118,8 @@ Press `t` on any history entry to open the tag editor. Enter a comma-separated l
 ## TODO
 
 - [ ] support && and |
+- [ ] add step result preview (one liner builder)
+- [ ] add tldr support
+- [ ] autocomplete env vars
 - [ ] support stdout stderr redirects
 - [ ] capital X: capture stdout/stderr to files, show exit code in history
