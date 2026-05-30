@@ -119,6 +119,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return a, tea.Quit
 				}
 				return a, nil
+			case msg.String() == "a":
+				detail, cmd := newDetailModel(service.NewBlankInvocation(), a.width).WithCommandEditing()
+				a.detail = detail
+				a.screen = screenDetail
+				return a, cmd
 			default:
 				var cmd tea.Cmd
 				a.history, cmd = a.history.Update(msg)

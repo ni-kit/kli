@@ -137,8 +137,17 @@ func buildCommandRow(command string) displayRow {
 	return displayRow{kind: rowCommand, name: "command", value: command}
 }
 
+func hasArgRow(rows []displayRow) bool {
+	for _, dr := range rows {
+		if dr.kind == rowArg {
+			return true
+		}
+	}
+	return false
+}
+
 func buildRows(args []domain.Arg) []displayRow {
-	rows := make([]displayRow, 0, len(args))
+	rows := make([]displayRow, 0, max(1, len(args)))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch a.Kind {
@@ -159,6 +168,9 @@ func buildRows(args []domain.Arg) []displayRow {
 		case domain.ArgFlagValue:
 			rows = append(rows, displayRow{kind: rowArg, name: "", value: a.Value, secret: a.Redacted})
 		}
+	}
+	if len(rows) == 0 {
+		rows = append(rows, displayRow{kind: rowArg})
 	}
 	return rows
 }
@@ -277,6 +289,9 @@ type detailModel struct {
 }
 
 func (m detailModel) canExec() bool {
+	if m.CurrentCommand() == "" {
+		return false
+	}
 	for _, dr := range m.rows {
 		if dr.kind == rowRedirect && dr.redirect.Target == domain.RedirectFile && dr.redirect.File == "" {
 			return false
@@ -353,6 +368,19 @@ func parseFileRedirectInput(s string) (file string, append bool) {
 
 func (m detailModel) IsEditing() bool { return m.mode == modeEditing }
 
+// WithCommandEditing positions the cursor on the command row and opens it for
+// editing immediately — used when creating a new blank command.
+func (m detailModel) WithCommandEditing() (detailModel, tea.Cmd) {
+	for i, dr := range m.rows {
+		if dr.kind == rowCommand {
+			m.row = i
+			m.col = 1
+			return m.startEditing(dr.value)
+		}
+	}
+	return m, nil
+}
+
 func (m detailModel) Update(msg tea.Msg) (detailModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -398,6 +426,21 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			if !hasCommandRow(m.rows) {
 				insertAt := min(len(m.rows), countEnvRows(m.rows))
 				m.rows = append(m.rows[:insertAt], append([]displayRow{buildCommandRow(m.inv.Command)}, m.rows[insertAt:]...)...)
+				m.row = insertAt
+			}
+			if !hasArgRow(m.rows) {
+				insertAt := 0
+				for i, dr := range m.rows {
+					if dr.kind == rowCommand {
+						insertAt = i + 1
+						break
+					}
+				}
+				newRows := make([]displayRow, 0, len(m.rows)+1)
+				newRows = append(newRows, m.rows[:insertAt]...)
+				newRows = append(newRows, displayRow{kind: rowArg})
+				newRows = append(newRows, m.rows[insertAt:]...)
+				m.rows = newRows
 				m.row = insertAt
 			}
 			if m.row >= len(m.rows) && m.row > 0 {
@@ -1104,17 +1147,27 @@ func (m detailModel) renderRow(r int, dr displayRow, env []string) string {
 func (m detailModel) renderCommandRow(r int, dr displayRow) string {
 	isActive := r == m.row && !m.onButton()
 	width := colNameW + colValueW + 2
+	cmdEmpty := dr.value == ""
 
 	var text string
 	if isActive && m.mode == modeEditing {
 		text = m.input.View()
+	} else if cmdEmpty {
+		text = padStr("<enter command>", width)
 	} else {
 		text = padStr(dr.value, width)
 	}
 
-	cell := headerStyle.Render(text)
-	if isActive {
+	var cell string
+	switch {
+	case isActive && m.mode == modeEditing:
+		cell = headerStyle.Render(text)
+	case cmdEmpty:
+		cell = redirectMissingStyle.Render(text)
+	case isActive:
 		cell = cellSelected.Render(text)
+	default:
+		cell = headerStyle.Render(text)
 	}
 
 	line := "  " + cell

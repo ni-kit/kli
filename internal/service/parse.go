@@ -89,6 +89,16 @@ func newID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
+// NewBlankInvocation returns an empty invocation with a fresh ID and a run
+// anchored to the current time and directory, ready for the user to fill in.
+func NewBlankInvocation() domain.Invocation {
+	cwd, _ := os.Getwd()
+	return domain.Invocation{
+		ID:   newID(),
+		Runs: []domain.Run{{RunAt: time.Now(), Cwd: cwd}},
+	}
+}
+
 // extractRedirects scans tokens for shell redirect operators, removes them from
 // the list, and returns the cleaned tokens plus stdout/stderr redirect config.
 func extractRedirects(tokens []string) (remaining []string, stdout, stderr domain.StreamRedirect) {
