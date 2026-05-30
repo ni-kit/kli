@@ -936,7 +936,7 @@ func padStr(s string, w int) string {
 }
 
 func clearCopiedAfter() tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return copiedMsg{} })
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return copiedMsg{} })
 }
 
 func clearSavedAfter() tea.Cmd {

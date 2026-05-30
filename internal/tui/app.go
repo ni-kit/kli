@@ -145,7 +145,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	default:
-		if a.screen == screenDetail && a.detail.IsEditing() {
+		if a.screen == screenDetail {
 			var cmd tea.Cmd
 			a.detail, cmd = a.detail.Update(msg)
 			return a, cmd
