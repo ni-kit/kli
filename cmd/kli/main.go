@@ -258,8 +258,33 @@ func execArgv(argv []string, env []string) {
 		fmt.Fprintln(os.Stderr, "kli: command not found:", argv[0])
 		os.Exit(1)
 	}
-	if err := syscall.Exec(bin, argv, append(os.Environ(), env...)); err != nil {
+	if err := syscall.Exec(bin, argv, mergedEnv(os.Environ(), env)); err != nil {
 		fmt.Fprintln(os.Stderr, "kli: exec failed:", err)
 		os.Exit(1)
 	}
+}
+
+func mergedEnv(base []string, overrides []string) []string {
+	result := append([]string(nil), base...)
+	index := make(map[string]int, len(base))
+	for i, item := range result {
+		key, _, ok := strings.Cut(item, "=")
+		if ok {
+			index[key] = i
+		}
+	}
+
+	for _, item := range overrides {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		if i, exists := index[key]; exists {
+			result[i] = item
+			continue
+		}
+		index[key] = len(result)
+		result = append(result, item)
+	}
+	return result
 }
