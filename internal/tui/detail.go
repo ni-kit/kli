@@ -2,8 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +12,7 @@ import (
 	"github.com/atotto/clipboard"
 
 	"github.com/ni-kit/kli/internal/domain"
+	"github.com/ni-kit/kli/internal/service"
 )
 
 const (
@@ -39,6 +38,9 @@ var (
 	cellEnvHint    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	cellHeader     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
 	rowActiveStyle = lipgloss.NewStyle().Background(lipgloss.Color("237"))
+
+	completionActiveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("245"))
+	completionItemStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
 	runBtnNormal  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	runBtnFocused = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("34")).Padding(0, 2)
@@ -681,79 +683,76 @@ func parseFileRedirectInput(s string) (file string, append bool) {
 	return strings.TrimSpace(s), false
 }
 
-// availableEnvNames returns env var names to suggest for $VAR completion.
-// The invocation's own env rows come first; system env follows, sorted.
-func (m detailModel) availableEnvNames() []string {
-	seen := map[string]struct{}{}
+func (m detailModel) localEnvNames() []string {
 	var names []string
 	for _, dr := range m.rows {
 		if dr.kind == rowEnv && dr.name != "" {
-			if _, ok := seen[dr.name]; !ok {
-				seen[dr.name] = struct{}{}
-				names = append(names, dr.name)
-			}
-		}
-	}
-	sys := os.Environ()
-	sysNames := make([]string, 0, len(sys))
-	for _, kv := range sys {
-		if k, _, ok := strings.Cut(kv, "="); ok && k != "" {
-			sysNames = append(sysNames, k)
-		}
-	}
-	slices.Sort(sysNames)
-	for _, name := range sysNames {
-		if _, ok := seen[name]; !ok {
-			seen[name] = struct{}{}
-			names = append(names, name)
+			names = append(names, dr.name)
 		}
 	}
 	return names
 }
 
-// isEnvIdentifier reports whether every rune in s is a valid env-var name
-// character (letter, digit, or underscore).
-func isEnvIdentifier(s string) bool {
-	for _, r := range s {
-		if r != '_' && !(r >= 'A' && r <= 'Z') && !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') {
-			return false
-		}
+func (m detailModel) fileCompletionEnabled() bool {
+	if m.onButton() {
+		return false
 	}
-	return true
+	switch m.rows[m.row].kind {
+	case rowCommand:
+		return true
+	case rowRedirect:
+		return m.rows[m.row].redirect.Target == domain.RedirectFile
+	case rowEnv:
+		return m.col == 1
+	case rowArg:
+		return m.col == 1
+	default:
+		return false
+	}
 }
 
-// envCompletion returns the suffix to complete the $VAR or ${VAR name the
-// user is currently typing, or "" if no suggestion applies.
-// For ${VAR the returned suffix includes the closing }.
-func (m detailModel) envCompletion() string {
-	val := m.input.Value()
-	names := m.availableEnvNames()
+func (m detailModel) completions() []service.CompletionSuggestion {
+	return service.CompleteInputs(service.CompletionOptions{
+		Value:       m.input.Value(),
+		LocalEnv:    m.localEnvNames(),
+		Cwd:         m.inv.LastRun().Cwd,
+		EnableEnv:   true,
+		EnableFiles: m.fileCompletionEnabled(),
+	})
+}
 
-	// ${VAR pattern — last ${ with no closing } yet.
-	if braceIdx := strings.LastIndex(val, "${"); braceIdx >= 0 {
-		prefix := val[braceIdx+2:]
-		if len(prefix) > 0 && !strings.Contains(prefix, "}") && isEnvIdentifier(prefix) {
-			for _, name := range names {
-				if strings.HasPrefix(name, prefix) && len(name) > len(prefix) {
-					return name[len(prefix):] + "}"
-				}
-			}
-			return ""
-		}
+func (m detailModel) completion() string {
+	suggestions := m.completions()
+	if len(suggestions) == 0 {
+		return ""
+	}
+	return suggestions[0].Suffix
+}
+
+func (m detailModel) completionDropdown() string {
+	if m.mode != modeEditing || m.onButton() {
+		return ""
+	}
+	suggestions := m.completions()
+	if len(suggestions) == 0 {
+		return ""
 	}
 
-	// $VAR pattern — last $ followed only by identifier characters.
-	if idx := strings.LastIndex(val, "$"); idx >= 0 {
-		prefix := val[idx+1:]
-		if len(prefix) > 0 && isEnvIdentifier(prefix) {
-			for _, name := range names {
-				if strings.HasPrefix(name, prefix) && len(name) > len(prefix) {
-					return name[len(prefix):]
-				}
-			}
+	indent := "  "
+	if !m.onCommandRow() && m.col == 1 {
+		indent += strings.Repeat(" ", colNameW+2)
+	}
+
+	var b strings.Builder
+	for i, suggestion := range suggestions {
+		line := padStr(suggestion.Value, colValueW)
+		if i == 0 {
+			b.WriteString(indent + completionActiveStyle.Render("> "+line) + "\n")
+		} else {
+			b.WriteString(indent + completionItemStyle.Render("  "+line) + "\n")
 		}
 	}
-	return ""
+	return b.String()
 }
 
 func (m detailModel) IsEditing() bool { return m.mode == modeEditing }
@@ -1098,7 +1097,7 @@ func (m detailModel) updateEditing(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 		m.mode = modeNormal
 		return m, nil
 	case "tab":
-		if completion := m.envCompletion(); completion != "" {
+		if completion := m.completion(); completion != "" {
 			m.input.SetValue(m.input.Value() + completion)
 			m.input.CursorEnd()
 		}
@@ -1461,6 +1460,9 @@ func (m detailModel) View() string {
 				continue
 			}
 			b.WriteString(m.renderRow(r, dr, env) + "\n")
+			if r == m.row {
+				b.WriteString(m.completionDropdown())
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -1471,6 +1473,9 @@ func (m detailModel) View() string {
 			continue
 		}
 		b.WriteString(m.renderCommandRow(r, dr) + "\n")
+		if r == m.row {
+			b.WriteString(m.completionDropdown())
+		}
 	}
 
 	b.WriteString("\n")
@@ -1484,6 +1489,9 @@ func (m detailModel) View() string {
 			continue
 		}
 		b.WriteString(m.renderRow(r, dr, env) + "\n")
+		if r == m.row {
+			b.WriteString(m.completionDropdown())
+		}
 	}
 
 	b.WriteString("\n")
@@ -1498,6 +1506,9 @@ func (m detailModel) View() string {
 				continue
 			}
 			b.WriteString(m.renderRedirectRow(r, dr) + "\n")
+			if r == m.row {
+				b.WriteString(m.completionDropdown())
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -1595,7 +1606,7 @@ func (m detailModel) renderRedirectRow(r int, dr displayRow) string {
 		} else {
 			valCell = cellSelected.Render(valText)
 			if m.mode == modeEditing {
-				if ghost := m.envCompletion(); ghost != "" {
+				if ghost := m.completion(); ghost != "" {
 					valCell += hintStyle.Render(ghost)
 				}
 			}
@@ -1668,7 +1679,7 @@ func (m detailModel) renderRow(r int, dr displayRow, env []string) string {
 		nameCell = styledCell(nameText, 0, m.col, nameStyle)
 		valCell = styledCell(valText, 1, m.col, valStyle)
 		if m.mode == modeEditing && m.col == 1 {
-			if ghost := m.envCompletion(); ghost != "" {
+			if ghost := m.completion(); ghost != "" {
 				valCell += hintStyle.Render(ghost)
 			}
 		}
@@ -1719,7 +1730,7 @@ func (m detailModel) renderCommandRow(r int, dr displayRow) string {
 	switch {
 	case isActive && m.mode == modeEditing:
 		cell = headerStyle.Render(text)
-		if ghost := m.envCompletion(); ghost != "" {
+		if ghost := m.completion(); ghost != "" {
 			cell += hintStyle.Render(ghost)
 		}
 	case cmdEmpty:
