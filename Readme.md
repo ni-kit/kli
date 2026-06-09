@@ -1,6 +1,6 @@
 # kli
 
-A CLI command history manager. Record invocations, browse and edit them in a TUI, then re-execute with modifications.
+A command history/execution manager. Record invocations, browse and edit them in a TUI, then re-execute with modifications.
 
 ## Usage
 
