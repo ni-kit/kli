@@ -66,7 +66,7 @@ func NewAppOnDetailWithToggles(inv domain.Invocation, invocations []domain.Invoc
 }
 
 func (a *App) Init() tea.Cmd {
-	a.history = newHistoryModel(a.invocations, a.width, a.height, a.initialSearch)
+	a.history = newHistoryModel(a.invocations, a.width, a.height, a.initialSearch, a.currentToggle())
 	if a.startOnDetail != nil {
 		a.detail = newDetailModel(*a.startOnDetail, a.width, a.height)
 	}
@@ -83,7 +83,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case setTagsInvMsg:
-		if err := a.historySvc.SetTags(msg.id, msg.tags); err == nil {
+		if err := a.historySvc.SetTags(msg.ref.id, msg.ref.fingerprint, msg.tags); err == nil {
 			if invs, err := a.historySvc.All(); err == nil {
 				a.invocations = invs
 				a.history.reloadInvocations(invs)
@@ -92,7 +92,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case deleteInvMsg:
-		if err := a.historySvc.Delete(msg.id); err == nil {
+		if err := a.historySvc.Delete(msg.ref.id, msg.ref.fingerprint); err == nil {
 			if invs, err := a.historySvc.All(); err == nil {
 				a.invocations = invs
 				a.history.reloadInvocations(invs)
@@ -103,7 +103,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case addToggleInvMsg:
 		if a.toggleSvc != nil {
 			if cwd, err := os.Getwd(); err == nil {
-				_, _ = a.toggleSvc.AddCommand(cwd, msg.inv)
+				if toggle, err := a.toggleSvc.AddCommand(cwd, msg.inv); err == nil {
+					a.history.setToggle(&toggle)
+				}
 			}
 		}
 		return a, nil
@@ -222,4 +224,19 @@ func (a *App) saveDetail() {
 		a.invocations = invs
 		a.history.reloadInvocations(invs)
 	}
+}
+
+func (a *App) currentToggle() *domain.Toggle {
+	if a.toggleSvc == nil {
+		return nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	toggle, err := a.toggleSvc.Get(cwd)
+	if err != nil {
+		return nil
+	}
+	return toggle
 }

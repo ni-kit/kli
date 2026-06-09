@@ -37,16 +37,28 @@ func (s *toggleService) AddCommand(cwd string, inv domain.Invocation) (domain.To
 	}
 	invCopy := inv
 	if idx < 0 {
-		t := domain.Toggle{Cwd: cwd, One: &invCopy, State: domain.ToggleStateZero}
+		next := domain.ToggleStateZero
+		t := domain.Toggle{Cwd: cwd, One: &invCopy, State: domain.ToggleStateZero, NextAddState: &next}
 		toggles = append(toggles, t)
 		return t, s.repo.SaveAll(toggles)
 	}
 
 	t := toggles[idx]
-	if t.One == nil || t.One.CommandFingerprint() == inv.CommandFingerprint() {
+	fp := inv.CommandFingerprint()
+	switch {
+	case t.One != nil && t.One.CommandFingerprint() == fp:
 		t.One = &invCopy
-	} else {
+	case t.Zero != nil && t.Zero.CommandFingerprint() == fp:
 		t.Zero = &invCopy
+	default:
+		slot := t.NextAddSlot()
+		if slot == domain.ToggleStateOne {
+			t.One = &invCopy
+		} else {
+			t.Zero = &invCopy
+		}
+		next := domain.NextToggleState(slot)
+		t.NextAddState = &next
 	}
 	toggles[idx] = t
 	return t, s.repo.SaveAll(toggles)

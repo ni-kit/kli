@@ -16,11 +16,13 @@ import (
 )
 
 type invItem struct {
-	inv domain.Invocation
+	inv          domain.Invocation
+	toggleMarker string
 }
 
 func (i invItem) Title() string {
-	return fmt.Sprintf("%s%-10s  %s%s%s",
+	return fmt.Sprintf("%s%s%-10s  %s%s%s",
+		i.toggleMarker,
 		envDot(i.inv),
 		i.inv.Command,
 		i.inv.ArgsPreview(),
@@ -73,6 +75,8 @@ var (
 	searchHelp   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	tagEditStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("178"))
 	envDotStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("178"))
+	toggleCur    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("113"))
+	toggleAlt    = lipgloss.NewStyle().Foreground(lipgloss.Color("178"))
 
 	tagColors = []lipgloss.Style{
 		lipgloss.NewStyle().Foreground(lipgloss.Color("178")), // yellow
@@ -161,9 +165,12 @@ type historyModel struct {
 	pendingD       bool
 	cwd            string
 	status         string
+	toggle         *domain.Toggle
+	tagTargetID    string
+	tagTargetFP    string
 }
 
-func newHistoryModel(invocations []domain.Invocation, width, height int, initialSearch string) historyModel {
+func newHistoryModel(invocations []domain.Invocation, width, height int, initialSearch string, toggle *domain.Toggle) historyModel {
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
 	delegate.SetSpacing(0)
@@ -196,12 +203,18 @@ func newHistoryModel(invocations []domain.Invocation, width, height int, initial
 		searchInput:    si,
 		tagInput:       ti,
 		cwd:            cwd,
+		toggle:         toggle,
 	}
 	m.applyFilter()
 	return m
 }
 
 func (m *historyModel) applyFilter() {
+	selected := commandRef{}
+	if inv := m.selectedInvocation(); inv != nil {
+		selected = refForInvocation(*inv)
+	}
+
 	raw := m.searchInput.Value()
 	if raw == "" {
 		m.filtered = m.allInvocations
@@ -213,9 +226,34 @@ func (m *historyModel) applyFilter() {
 
 	items := make([]list.Item, len(m.filtered))
 	for i, inv := range m.filtered {
-		items[i] = invItem{inv}
+		items[i] = invItem{inv: inv, toggleMarker: m.toggleMarker(inv)}
 	}
 	m.list.SetItems(items)
+	if selected.valid() {
+		m.selectInvocationRef(selected)
+	}
+}
+
+func (m historyModel) toggleMarker(inv domain.Invocation) string {
+	if m.toggle == nil {
+		return ""
+	}
+	fp := inv.CommandFingerprint()
+	if m.toggle.Zero != nil && m.toggle.Zero.CommandFingerprint() == fp {
+		return renderToggleMarker(domain.ToggleStateZero, m.toggle.State) + " "
+	}
+	if m.toggle.One != nil && m.toggle.One.CommandFingerprint() == fp {
+		return renderToggleMarker(domain.ToggleStateOne, m.toggle.State) + " "
+	}
+	return ""
+}
+
+func renderToggleMarker(memberState, currentState domain.ToggleState) string {
+	marker := fmt.Sprintf("(%d)", memberState)
+	if memberState == currentState {
+		return toggleCur.Render(marker)
+	}
+	return toggleAlt.Render(marker)
 }
 
 func (m historyModel) Update(msg tea.Msg) (historyModel, tea.Cmd) {
@@ -258,6 +296,8 @@ func (m historyModel) updateNormal(msg tea.KeyPressMsg) (historyModel, tea.Cmd) 
 		m.status = ""
 		if inv := m.selectedInvocation(); inv != nil {
 			m.mode = histModeEditTags
+			m.tagTargetID = inv.ID
+			m.tagTargetFP = inv.CommandFingerprint()
 			m.tagInput.SetValue(strings.Join(inv.Tags, ", "))
 			cmd := m.tagInput.Focus()
 			return m, cmd
@@ -272,7 +312,7 @@ func (m historyModel) updateNormal(msg tea.KeyPressMsg) (historyModel, tea.Cmd) 
 		if m.pendingD {
 			m.pendingD = false
 			if inv := m.selectedInvocation(); inv != nil {
-				return m, deleteInvCmd(inv.ID)
+				return m, deleteInvCmd(refForInvocation(*inv))
 			}
 		} else {
 			m.pendingD = true
@@ -310,14 +350,20 @@ func (m historyModel) updateEditTags(msg tea.KeyPressMsg) (historyModel, tea.Cmd
 	switch msg.String() {
 	case "enter":
 		raw := m.tagInput.Value()
+		targetID := m.tagTargetID
+		targetFP := m.tagTargetFP
+		m.tagTargetID = ""
+		m.tagTargetFP = ""
 		m.tagInput.Blur()
 		m.mode = histModeNormal
-		if inv := m.selectedInvocation(); inv != nil {
+		if targetID != "" {
 			tags := parseTags(raw)
-			return m, setTagsMsg(inv.ID, tags)
+			return m, setTagsMsg(commandRef{id: targetID, fingerprint: targetFP}, tags)
 		}
 		return m, nil
 	case "esc":
+		m.tagTargetID = ""
+		m.tagTargetFP = ""
 		m.tagInput.Blur()
 		m.mode = histModeNormal
 		return m, nil
@@ -396,6 +442,15 @@ func (m historyModel) selectedInvocation() *domain.Invocation {
 	return &ii.inv
 }
 
+func (m *historyModel) selectInvocationRef(ref commandRef) {
+	for i, inv := range m.filtered {
+		if ref.matches(inv) {
+			m.list.Select(i)
+			return
+		}
+	}
+}
+
 func (m *historyModel) setSize(w, h int) {
 	m.width = w
 	m.height = h
@@ -409,6 +464,11 @@ func (m *historyModel) reloadInvocations(invs []domain.Invocation) {
 	m.applyFilter()
 }
 
+func (m *historyModel) setToggle(toggle *domain.Toggle) {
+	m.toggle = toggle
+	m.applyFilter()
+}
+
 func max(a, b int) int {
 	if a > b {
 		return a
@@ -417,22 +477,39 @@ func max(a, b int) int {
 }
 
 type setTagsInvMsg struct {
-	id   string
+	ref  commandRef
 	tags []string
 }
 
-func setTagsMsg(id string, tags []string) tea.Cmd {
-	return func() tea.Msg { return setTagsInvMsg{id: id, tags: tags} }
+func setTagsMsg(ref commandRef, tags []string) tea.Cmd {
+	return func() tea.Msg { return setTagsInvMsg{ref: ref, tags: tags} }
 }
 
-type deleteInvMsg struct{ id string }
+type deleteInvMsg struct{ ref commandRef }
 
-func deleteInvCmd(id string) tea.Cmd {
-	return func() tea.Msg { return deleteInvMsg{id: id} }
+func deleteInvCmd(ref commandRef) tea.Cmd {
+	return func() tea.Msg { return deleteInvMsg{ref: ref} }
 }
 
 type addToggleInvMsg struct{ inv domain.Invocation }
 
 func addToggleMsg(inv domain.Invocation) tea.Cmd {
 	return func() tea.Msg { return addToggleInvMsg{inv: inv} }
+}
+
+type commandRef struct {
+	id          string
+	fingerprint string
+}
+
+func refForInvocation(inv domain.Invocation) commandRef {
+	return commandRef{id: inv.ID, fingerprint: inv.CommandFingerprint()}
+}
+
+func (r commandRef) valid() bool {
+	return r.id != "" || r.fingerprint != ""
+}
+
+func (r commandRef) matches(inv domain.Invocation) bool {
+	return inv.ID == r.id && (r.fingerprint == "" || inv.CommandFingerprint() == r.fingerprint)
 }
