@@ -136,11 +136,17 @@ func renderTags(tags []string) string {
 	if len(tags) == 0 {
 		return ""
 	}
-	var parts []string
-	for _, t := range tags {
-		parts = append(parts, tagColor(t).Render(t))
+	var b strings.Builder
+	b.WriteString(" ")
+	b.WriteString(tagEditStyle.Render("["))
+	for i, t := range tags {
+		if i > 0 {
+			b.WriteString(tagEditStyle.Render(","))
+		}
+		b.WriteString(tagColor(t).Render(t))
 	}
-	return " [" + strings.Join(parts, ",") + "]"
+	b.WriteString(tagEditStyle.Render("]"))
+	return b.String()
 }
 
 const previewLines = 3 // title + 2 content rows
@@ -174,6 +180,7 @@ func newHistoryModel(invocations []domain.Invocation, width, height int, initial
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
 	delegate.SetSpacing(0)
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.Foreground(lipgloss.Color("#dddddd"))
 
 	l := list.New(nil, delegate, width, max(1, height-previewLines))
 	l.SetShowTitle(false)
