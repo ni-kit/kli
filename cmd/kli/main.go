@@ -114,15 +114,25 @@ const (
 	latestEcho
 )
 
+type toggleAction int
+
+const (
+	toggleNone toggleAction = iota
+	toggleExec
+	toggleEcho
+)
+
 type cliOptions struct {
-	importHistory bool
-	execArgv      []string
-	recordArgv    []string
-	openRecorded  bool
-	latestAction  latestAction
-	confirm       bool
-	currentDir    bool
-	initialSearch string
+	importHistory   bool
+	execArgv        []string
+	recordArgv      []string
+	openRecorded    bool
+	latestAction    latestAction
+	toggleAction    toggleAction
+	toggleEchoAfter bool
+	confirm         bool
+	currentDir      bool
+	initialSearch   string
 }
 
 func main() {
@@ -134,8 +144,56 @@ func main() {
 	histRepo := repo.NewJSONHistoryRepo(histPath)
 	historySvc := service.NewHistoryService(histRepo)
 	importSvc := service.NewImportService(histRepo)
+	togglePath, err := repo.TogglePath()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "kli: cannot resolve toggle path:", err)
+		os.Exit(1)
+	}
+	toggleSvc := service.NewToggleService(repo.NewJSONToggleRepo(togglePath))
 
 	opts := parseCLIOptions(os.Args[1:])
+	if opts.toggleAction != toggleNone {
+		cwd, _ := os.Getwd()
+		toggle, err := toggleSvc.Get(cwd)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if opts.toggleAction == toggleEcho {
+			echoToggle(*toggle)
+			return
+		}
+		if opts.confirm {
+			echoToggle(*toggle)
+			ok, err := confirmToggleAction()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "kli: prompt failed:", err)
+				os.Exit(1)
+			}
+			if !ok {
+				return
+			}
+		}
+		inv := toggle.Alternative()
+		if inv == nil {
+			fmt.Fprintln(os.Stderr, "kli: alternative toggle command is not configured")
+			os.Exit(1)
+		}
+		code := runInvocationAndWait(*inv)
+		if code == 0 {
+			nextState := toggle.AlternativeState()
+			if err := toggleSvc.SetState(cwd, nextState); err != nil {
+				fmt.Fprintln(os.Stderr, "kli: failed to save toggle state:", err)
+				os.Exit(1)
+			}
+			if opts.toggleEchoAfter {
+				toggle.State = nextState
+				echoToggle(*toggle)
+			}
+		}
+		os.Exit(code)
+	}
+
 	if opts.importHistory {
 		n, err := importSvc.ImportShellHistory()
 		if err != nil {
@@ -204,7 +262,7 @@ func main() {
 			execInvocation(*inv)
 		}
 
-		runApp(tui.NewAppOnDetail(*inv, invocations, historySvc), historySvc)
+		runApp(tui.NewAppOnDetailWithToggles(*inv, invocations, historySvc, toggleSvc), historySvc)
 		return
 	}
 
@@ -214,11 +272,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "kli: no history yet")
 			os.Exit(1)
 		}
-		app = tui.NewAppOnDetail(invocations[0], invocations, historySvc)
+		app = tui.NewAppOnDetailWithToggles(invocations[0], invocations, historySvc, toggleSvc)
 	} else if opts.initialSearch != "" {
-		app = tui.NewAppWithSearch(invocations, historySvc, opts.initialSearch)
+		app = tui.NewAppWithSearchAndToggles(invocations, historySvc, toggleSvc, opts.initialSearch)
 	} else {
-		app = tui.NewApp(invocations, historySvc)
+		app = tui.NewAppWithSearchAndToggles(invocations, historySvc, toggleSvc, "")
 	}
 
 	runApp(app, historySvc)
@@ -230,6 +288,18 @@ func parseCLIOptions(args []string) cliOptions {
 	}
 	if args[0] == "--import" {
 		return cliOptions{importHistory: true}
+	}
+	if len(args) == 1 && args[0] == "-t" {
+		return cliOptions{toggleAction: toggleExec, confirm: true}
+	}
+	if len(args) == 1 && args[0] == "-ty" {
+		return cliOptions{toggleAction: toggleExec}
+	}
+	if len(args) == 1 && args[0] == "-te" {
+		return cliOptions{toggleAction: toggleEcho}
+	}
+	if len(args) == 1 && args[0] == "-tey" {
+		return cliOptions{toggleAction: toggleExec, toggleEchoAfter: true}
 	}
 	if len(args) > 1 && (args[0] == "-x" || args[0] == "--exec") {
 		return cliOptions{execArgv: args[1:]}
@@ -289,6 +359,37 @@ func confirmAction(inv *domain.Invocation, action latestAction) (bool, error) {
 	return answer == "y" || answer == "yes", nil
 }
 
+func confirmToggleAction() (bool, error) {
+	fmt.Print("Execute alternative? [y/N]: ")
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return false, err
+	}
+	answer := strings.TrimSpace(strings.ToLower(line))
+	return answer == "y" || answer == "yes", nil
+}
+
+func echoToggle(toggle domain.Toggle) {
+	const (
+		reset  = "\033[0m"
+		green  = "\033[32m"
+		yellow = "\033[33m"
+		dim    = "\033[2m"
+	)
+
+	current := "(not set)"
+	if inv := toggle.Current(); inv != nil {
+		current = inv.FullCommand()
+	}
+	alternative := "(not set)"
+	if inv := toggle.Alternative(); inv != nil {
+		alternative = inv.FullCommand()
+	}
+
+	fmt.Printf("%scurrent [%d]: %s%s\n", green, toggle.State, current, reset)
+	fmt.Printf("%salternative [%d]: %s%s\n", yellow+dim, toggle.AlternativeState(), alternative, reset)
+}
+
 func runApp(app *tui.App, historySvc service.HistoryService) {
 	p := tea.NewProgram(app)
 	if _, err := p.Run(); err != nil {
@@ -310,6 +411,21 @@ func runApp(app *tui.App, historySvc service.HistoryService) {
 
 		execInvocation(inv)
 	}
+}
+
+func runInvocationAndWait(inv domain.Invocation) int {
+	if inv.Command == "" {
+		fmt.Fprintln(os.Stderr, "kli: empty toggle command")
+		return 1
+	}
+	fmt.Println("$", inv.FullCommand())
+	groups := chainAndGroups(inv.AllSegments())
+	for _, group := range groups {
+		if code := runPipeGroupAndWait(group); code != 0 {
+			return code
+		}
+	}
+	return 0
 }
 
 // execInvocation executes an invocation, replacing the current process with the

@@ -12,9 +12,10 @@ type appKeyMap struct {
 }
 
 type histKeyMap struct {
-	New    key.Binding
-	Tag    key.Binding
-	Delete key.Binding
+	New       key.Binding
+	Tag       key.Binding
+	ToggleAdd key.Binding
+	Delete    key.Binding
 }
 
 var (
@@ -25,9 +26,10 @@ var (
 	}
 
 	histKeys = histKeyMap{
-		New:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "new command")),
-		Tag:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "edit tags")),
-		Delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("dd", "delete")),
+		New:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "new command")),
+		Tag:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "edit tags")),
+		ToggleAdd: key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "add toggle")),
+		Delete:    key.NewBinding(key.WithKeys("d"), key.WithHelp("dd", "delete")),
 	}
 )
 

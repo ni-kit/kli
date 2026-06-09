@@ -160,6 +160,7 @@ type historyModel struct {
 	tagInput       textinput.Model
 	pendingD       bool
 	cwd            string
+	status         string
 }
 
 func newHistoryModel(invocations []domain.Invocation, width, height int, initialSearch string) historyModel {
@@ -173,7 +174,7 @@ func newHistoryModel(invocations []domain.Invocation, width, height int, initial
 	l.SetFilteringEnabled(false) // we do filtering ourselves
 	l.KeyMap = historyKeyMap()
 	l.AdditionalShortHelpKeys = func() []key.Binding {
-		return []key.Binding{histKeys.New}
+		return []key.Binding{histKeys.New, histKeys.ToggleAdd}
 	}
 
 	si := textinput.New()
@@ -254,11 +255,18 @@ func (m historyModel) updateNormal(msg tea.KeyPressMsg) (historyModel, tea.Cmd) 
 		return m, cmd
 	case key.Matches(msg, histKeys.Tag):
 		m.pendingD = false
+		m.status = ""
 		if inv := m.selectedInvocation(); inv != nil {
 			m.mode = histModeEditTags
 			m.tagInput.SetValue(strings.Join(inv.Tags, ", "))
 			cmd := m.tagInput.Focus()
 			return m, cmd
+		}
+	case key.Matches(msg, histKeys.ToggleAdd):
+		m.pendingD = false
+		if inv := m.selectedInvocation(); inv != nil {
+			m.status = "added to toggle tuple for this directory"
+			return m, addToggleMsg(*inv)
 		}
 	case key.Matches(msg, histKeys.Delete):
 		if m.pendingD {
@@ -272,6 +280,7 @@ func (m historyModel) updateNormal(msg tea.KeyPressMsg) (historyModel, tea.Cmd) 
 		return m, nil
 	default:
 		m.pendingD = false
+		m.status = ""
 	}
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
@@ -351,18 +360,21 @@ func (m historyModel) View() string {
 			}
 			preview := wrapText(inv.FullCommand(), maxW)[0] // first line only
 			b.WriteString(previewStyle.Render("  "+preview) + "\n")
-			hint := "  enter: edit  •  x: exec  •  /: search  •  t: edit tags  •  dd: delete"
+			hint := "  enter: edit  •  x: exec  •  /: search  •  t: edit tags  •  T: add toggle  •  dd: delete"
 			if m.pendingD {
 				b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("  dd: press d again to confirm delete") + "\n")
 				b.WriteString(m.list.View())
 				return b.String()
+			}
+			if m.status != "" {
+				hint += searchStyle.Render("  [" + m.status + "]")
 			}
 			if raw != "" {
 				hint += searchStyle.Render("  [" + raw + "]")
 			}
 			b.WriteString(previewHint.Render(hint) + "\n")
 		} else {
-			hint := "  /: search  •  t: edit tags"
+			hint := "  /: search  •  t: edit tags  •  T: add toggle"
 			if raw != "" {
 				hint += searchStyle.Render("  [" + raw + "]")
 			}
@@ -417,4 +429,10 @@ type deleteInvMsg struct{ id string }
 
 func deleteInvCmd(id string) tea.Cmd {
 	return func() tea.Msg { return deleteInvMsg{id: id} }
+}
+
+type addToggleInvMsg struct{ inv domain.Invocation }
+
+func addToggleMsg(inv domain.Invocation) tea.Cmd {
+	return func() tea.Msg { return addToggleInvMsg{inv: inv} }
 }

@@ -40,6 +40,18 @@ kli -le
 # Print the most recent command from the current directory
 kli -le .
 
+# Show current/alternative toggle commands, then ask before executing alternative
+kli -t
+
+# Execute the configured directory toggle without asking
+kli -ty
+
+# Print the current toggle command and the alternative command
+kli -te
+
+# Execute without asking, then print the updated toggle state
+kli -tey
+
 # Record and exec immediately (no TUI)
 kli -x <cmd> [args...]
 kli --exec <cmd> [args...]
@@ -47,6 +59,30 @@ kli --exec <cmd> [args...]
 # Import shell history (zsh/bash/fish) into kli
 kli --import
 ```
+
+## Help
+
+| Command | Action |
+|---------|--------|
+| `kli` | Open the history browser |
+| `kli .` | Open the history browser filtered to the current directory |
+| `kli <cmd> [args...]` | Record a command and open it in detail/edit view |
+| `kli -x <cmd> [args...]` | Record and execute a command immediately |
+| `kli --exec <cmd> [args...]` | Same as `kli -x` |
+| `kli -l` | Open the latest history entry in detail/edit view, with confirmation |
+| `kli --latest` | Same as `kli -l` |
+| `kli -ly` | Open the latest history entry without confirmation |
+| `kli -lx` | Execute the latest history entry, with confirmation |
+| `kli -lxy` | Execute the latest history entry without confirmation |
+| `kli -le` | Print the latest history entry |
+| `kli -lx .` | Execute the latest history entry from the current directory, with confirmation |
+| `kli -lxy .` | Execute the latest history entry from the current directory without confirmation |
+| `kli -le .` | Print the latest history entry from the current directory |
+| `kli -t` | Show current/alternative toggle commands and ask before executing the alternative |
+| `kli -ty` | Execute the alternative toggle command without asking |
+| `kli -te` | Print the current toggle command and alternative command |
+| `kli -tey` | Execute the alternative toggle command without asking, then print the updated state |
+| `kli --import` | Import shell history from zsh, bash, fish, or sh history files |
 
 ## Installation
 
@@ -65,6 +101,7 @@ Navigate with `hjkl` or arrow keys.
 | `a` | Create new command |
 | `/` | Search (see search syntax below) |
 | `t` | Edit tags (comma-separated list) |
+| `T` | Add selected command to this directory's toggle tuple |
 | `q` / `ctrl+c` | Quit |
 
 ## Search syntax
@@ -117,6 +154,12 @@ Leading `KEY=value` env vars are stored with the command and set when executing 
 ## Tags
 
 Press `t` on any history entry to open the tag editor. Enter a comma-separated list of tags and press `enter` to save. Clear the field and confirm to remove all tags. Same tag name always gets the same color across all entries.
+
+## Directory toggles
+
+Press `T` on a history entry to add that command to the current directory's toggle tuple. The first command added is state `1`; the second command is state `0`.
+
+`kli -t` prints the current and alternative commands, asks for confirmation, then executes the alternative command for the current directory and flips the stored state only if the command exits successfully. Use `kli -ty` to skip the prompt. `kli -te` prints the current state command in color and shows the alternative command below it. `kli -tey` skips the prompt, executes the alternative, and prints the updated state after a successful toggle.
 
 ## Redirects
 

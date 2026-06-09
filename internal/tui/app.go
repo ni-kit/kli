@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
@@ -21,6 +23,7 @@ type App struct {
 	screen        screen
 	invocations   []domain.Invocation
 	historySvc    service.HistoryService
+	toggleSvc     service.ToggleService
 	history       historyModel
 	detail        detailModel
 	width         int
@@ -35,19 +38,29 @@ func NewApp(invocations []domain.Invocation, historySvc service.HistoryService) 
 }
 
 func NewAppWithSearch(invocations []domain.Invocation, historySvc service.HistoryService, initialSearch string) *App {
+	return NewAppWithSearchAndToggles(invocations, historySvc, nil, initialSearch)
+}
+
+func NewAppWithSearchAndToggles(invocations []domain.Invocation, historySvc service.HistoryService, toggleSvc service.ToggleService, initialSearch string) *App {
 	return &App{
 		screen:        screenHistory,
 		invocations:   invocations,
 		historySvc:    historySvc,
+		toggleSvc:     toggleSvc,
 		initialSearch: initialSearch,
 	}
 }
 
 func NewAppOnDetail(inv domain.Invocation, invocations []domain.Invocation, historySvc service.HistoryService) *App {
+	return NewAppOnDetailWithToggles(inv, invocations, historySvc, nil)
+}
+
+func NewAppOnDetailWithToggles(inv domain.Invocation, invocations []domain.Invocation, historySvc service.HistoryService, toggleSvc service.ToggleService) *App {
 	return &App{
 		screen:        screenDetail,
 		invocations:   invocations,
 		historySvc:    historySvc,
+		toggleSvc:     toggleSvc,
 		startOnDetail: &inv,
 	}
 }
@@ -83,6 +96,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if invs, err := a.historySvc.All(); err == nil {
 				a.invocations = invs
 				a.history.reloadInvocations(invs)
+			}
+		}
+		return a, nil
+
+	case addToggleInvMsg:
+		if a.toggleSvc != nil {
+			if cwd, err := os.Getwd(); err == nil {
+				_, _ = a.toggleSvc.AddCommand(cwd, msg.inv)
 			}
 		}
 		return a, nil
