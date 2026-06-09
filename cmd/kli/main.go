@@ -179,6 +179,9 @@ func main() {
 			fmt.Fprintln(os.Stderr, "kli: alternative toggle command is not configured")
 			os.Exit(1)
 		}
+		if err := historySvc.Record(service.Parse(inv.RawCommandTokens())); err != nil {
+			fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
+		}
 		code := runInvocationAndWait(*inv)
 		if code == 0 {
 			nextState := toggle.AlternativeState()
