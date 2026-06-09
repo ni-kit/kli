@@ -289,17 +289,11 @@ func parseCLIOptions(args []string) cliOptions {
 	if args[0] == "--import" {
 		return cliOptions{importHistory: true}
 	}
-	if len(args) == 1 && args[0] == "-t" {
-		return cliOptions{toggleAction: toggleExec, confirm: true}
+	if opts, ok := latestOptions(args, "--latest", latestOpen, true); ok {
+		return opts
 	}
-	if len(args) == 1 && args[0] == "-ty" {
-		return cliOptions{toggleAction: toggleExec}
-	}
-	if len(args) == 1 && args[0] == "-te" {
-		return cliOptions{toggleAction: toggleEcho}
-	}
-	if len(args) == 1 && args[0] == "-tey" {
-		return cliOptions{toggleAction: toggleExec, toggleEchoAfter: true}
+	if opts, ok := flagSetOptions(args); ok {
+		return opts
 	}
 	if len(args) > 1 && (args[0] == "-x" || args[0] == "--exec") {
 		return cliOptions{execArgv: args[1:]}
@@ -307,29 +301,102 @@ func parseCLIOptions(args []string) cliOptions {
 	if len(args) == 1 && args[0] == "." {
 		return cliOptions{initialSearch: "P:."}
 	}
-	if opts, ok := latestOptions(args, "-l", "--latest", latestOpen, true); ok {
-		return opts
-	}
-	if opts, ok := latestOptions(args, "-ly", "", latestOpen, false); ok {
-		return opts
-	}
-	if opts, ok := latestOptions(args, "-lx", "", latestExec, true); ok {
-		return opts
-	}
-	if opts, ok := latestOptions(args, "-lxy", "", latestExec, false); ok {
-		return opts
-	}
-	if opts, ok := latestOptions(args, "-le", "", latestEcho, true); ok {
-		return opts
-	}
 	return cliOptions{recordArgv: args, openRecorded: len(args) > 0}
 }
 
-func latestOptions(args []string, short, long string, action latestAction, confirm bool) (cliOptions, bool) {
+type cliFlagSet struct {
+	letters map[rune]bool
+	rest    []string
+}
+
+func flagSetOptions(args []string) (cliOptions, bool) {
+	set, ok := parseShortFlagSet(args)
+	if !ok {
+		return cliOptions{}, false
+	}
+
+	hasLatest := set.has('l')
+	hasToggle := set.has('t')
+	if hasLatest == hasToggle {
+		return cliOptions{}, false
+	}
+	if hasToggle {
+		return toggleFlagSetOptions(set)
+	}
+	return latestFlagSetOptions(set)
+}
+
+func parseShortFlagSet(args []string) (cliFlagSet, bool) {
+	set := cliFlagSet{letters: map[rune]bool{}}
+	i := 0
+	for ; i < len(args); i++ {
+		arg := args[i]
+		if arg == "." {
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") || len(arg) < 2 {
+			return cliFlagSet{}, false
+		}
+		for _, r := range arg[1:] {
+			switch r {
+			case 'e', 'l', 't', 'x', 'y':
+				if set.letters[r] {
+					return cliFlagSet{}, false
+				}
+				set.letters[r] = true
+			default:
+				return cliFlagSet{}, false
+			}
+		}
+	}
+	if len(set.letters) == 0 {
+		return cliFlagSet{}, false
+	}
+	set.rest = args[i:]
+	return set, true
+}
+
+func (s cliFlagSet) has(letter rune) bool {
+	return s.letters[letter]
+}
+
+func toggleFlagSetOptions(set cliFlagSet) (cliOptions, bool) {
+	if len(set.rest) > 0 || set.has('l') || set.has('x') {
+		return cliOptions{}, false
+	}
+	echo := set.has('e')
+	yes := set.has('y')
+	if echo && !yes {
+		return cliOptions{toggleAction: toggleEcho}, true
+	}
+	return cliOptions{toggleAction: toggleExec, toggleEchoAfter: echo, confirm: !yes}, true
+}
+
+func latestFlagSetOptions(set cliFlagSet) (cliOptions, bool) {
+	if len(set.rest) > 1 || (len(set.rest) == 1 && set.rest[0] != ".") || set.has('t') {
+		return cliOptions{}, false
+	}
+	if set.has('e') && set.has('x') {
+		return cliOptions{}, false
+	}
+	action := latestOpen
+	if set.has('e') {
+		action = latestEcho
+	} else if set.has('x') {
+		action = latestExec
+	}
+	return cliOptions{
+		latestAction: action,
+		confirm:      !set.has('y'),
+		currentDir:   len(set.rest) == 1,
+	}, true
+}
+
+func latestOptions(args []string, long string, action latestAction, confirm bool) (cliOptions, bool) {
 	if len(args) == 0 {
 		return cliOptions{}, false
 	}
-	if args[0] != short && (long == "" || args[0] != long) {
+	if args[0] != long {
 		return cliOptions{}, false
 	}
 	switch len(args) {

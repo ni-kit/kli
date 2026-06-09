@@ -181,7 +181,7 @@ func newHistoryModel(invocations []domain.Invocation, width, height int, initial
 	l.SetFilteringEnabled(false) // we do filtering ourselves
 	l.KeyMap = historyKeyMap()
 	l.AdditionalShortHelpKeys = func() []key.Binding {
-		return []key.Binding{histKeys.New, histKeys.ToggleAdd}
+		return []key.Binding{histKeys.New}
 	}
 
 	si := textinput.New()
