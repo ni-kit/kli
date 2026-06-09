@@ -73,6 +73,7 @@ var (
 		Save:        key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "save")),
 		PushCell:    key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "push cell to next line")),
 		MergeBack:   key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "merge flag into previous row")),
+		Env:         key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "toggle env")),
 		Redirects:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "toggle redirects")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
 	}
@@ -116,6 +117,7 @@ type detailKeyMap struct {
 	Save        key.Binding
 	PushCell    key.Binding
 	MergeBack   key.Binding
+	Env         key.Binding
 	Redirects   key.Binding
 	Help        key.Binding
 }
@@ -257,6 +259,22 @@ func countEnvRows(rows []displayRow) int {
 	return n
 }
 
+func hasNonEmptyEnv(inv domain.Invocation) bool {
+	for _, e := range inv.Env {
+		if e.Key != "" || e.Value != "" {
+			return true
+		}
+	}
+	for _, link := range inv.Chain {
+		for _, e := range link.Env {
+			if e.Key != "" || e.Value != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func flagLabel(a domain.Arg) string {
 	switch a.Kind {
 	case domain.ArgShortFlag:
@@ -295,6 +313,7 @@ type detailModel struct {
 	copied           bool
 	saved            bool
 	helpVisible      bool
+	envVisible       bool
 	redirectsVisible bool
 }
 
@@ -357,9 +376,51 @@ func (m detailModel) onCommandRow() bool {
 	return !m.onButton() && m.rows[m.row].kind == rowCommand
 }
 
+func (m detailModel) rowVisible(row int) bool {
+	if row < 0 || row >= len(m.rows) {
+		return false
+	}
+	switch m.rows[row].kind {
+	case rowEnv:
+		return m.envVisible
+	case rowRedirect:
+		return m.redirectsVisible
+	default:
+		return true
+	}
+}
+
+func (m detailModel) nextVisibleRowIdx(from int) int {
+	for i := max(0, from); i < len(m.rows); i++ {
+		if m.rowVisible(i) {
+			return i
+		}
+	}
+	return len(m.rows)
+}
+
+func (m detailModel) previousVisibleRowIdx(from int) int {
+	for i := min(from, len(m.rows)-1); i >= 0; i-- {
+		if m.rowVisible(i) {
+			return i
+		}
+	}
+	return len(m.rows)
+}
+
 func (m *detailModel) normalizeCursor() {
 	if m.onButton() {
 		return
+	}
+	if !m.rowVisible(m.row) {
+		if next := m.nextVisibleRowIdx(m.row); next < len(m.rows) {
+			m.row = next
+		} else {
+			m.row = m.previousVisibleRowIdx(m.row)
+		}
+		if m.onButton() {
+			return
+		}
 	}
 	if m.rows[m.row].kind == rowCommand || m.rows[m.row].kind == rowRedirect {
 		m.col = 1
@@ -388,7 +449,7 @@ func newDetailModel(inv domain.Invocation, width, height int) detailModel {
 		}
 	}
 
-	return detailModel{
+	m := detailModel{
 		inv:              inv,
 		width:            width,
 		height:           height,
@@ -396,8 +457,11 @@ func newDetailModel(inv domain.Invocation, width, height int) detailModel {
 		chainIdx:         0,
 		segRows:          segRows,
 		input:            ti,
+		envVisible:       hasNonEmptyEnv(inv),
 		redirectsVisible: redirectsVisible,
 	}
+	m.normalizeCursor()
+	return m
 }
 
 func (m *detailModel) setSize(w, h int) {
@@ -590,14 +654,12 @@ func (m *detailModel) deleteSegmentGoRight() {
 	m.undo = nil
 }
 
-// lastVisibleRowIdx returns the index of the last row that is visible given
-// the current redirectsVisible setting.
+// lastVisibleRowIdx returns the index of the last visible data row.
 func (m detailModel) lastVisibleRowIdx() int {
 	for i := len(m.rows) - 1; i >= 0; i-- {
-		if !m.redirectsVisible && m.rows[i].kind == rowRedirect {
-			continue
+		if m.rowVisible(i) {
+			return i
 		}
-		return i
 	}
 	return 0
 }
@@ -782,22 +844,14 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 	switch {
 	case key.Matches(msg, detailKeys.Up):
 		if m.row > 0 {
-			m.row--
-			if !m.redirectsVisible {
-				for m.row > 0 && m.rows[m.row].kind == rowRedirect {
-					m.row--
-				}
+			if prev := m.previousVisibleRowIdx(m.row - 1); prev < len(m.rows) {
+				m.row = prev
 			}
 		}
 		m.normalizeCursor()
 	case key.Matches(msg, detailKeys.Down):
 		if m.row < len(m.rows) {
-			m.row++
-			if !m.redirectsVisible {
-				for m.row < len(m.rows) && m.rows[m.row].kind == rowRedirect {
-					m.row++
-				}
-			}
+			m.row = m.nextVisibleRowIdx(m.row + 1)
 		}
 		m.normalizeCursor()
 	case key.Matches(msg, detailKeys.Left):
@@ -826,7 +880,7 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			} else {
 				m.switchToChain(m.chainIdx + 1)
 			}
-			m.row = 0
+			m.row = m.nextVisibleRowIdx(0)
 			m.col = 0
 			m.normalizeCursor()
 		case !m.onCommandRow() && m.col < numCols-1:
@@ -872,6 +926,9 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 	case key.Matches(msg, detailKeys.ToggleRow):
 		if !m.onButton() && m.rows[m.row].kind == rowRedirect {
 			m.rows[m.row].redirect = m.rows[m.row].redirect.Next()
+		} else if !m.onButton() && m.rows[m.row].kind == rowArg && m.col == 0 && m.rows[m.row].name != "" {
+			m.undo = &undoEntry{row: m.row, col: m.col, value: m.currentCell()}
+			m.rows[m.row].name = rotateFlagPrefix(m.rows[m.row].name)
 		} else if !m.onButton() && !m.onCommandRow() {
 			m.rows[m.row].disabled = !m.rows[m.row].disabled
 		}
@@ -925,14 +982,12 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 			m.normalizeCursor()
 			return m.startEditing("")
 		}
+	case key.Matches(msg, detailKeys.Env):
+		m.envVisible = !m.envVisible
+		m.normalizeCursor()
 	case key.Matches(msg, detailKeys.Redirects):
 		m.redirectsVisible = !m.redirectsVisible
-		if !m.redirectsVisible && !m.onButton() && m.rows[m.row].kind == rowRedirect {
-			for m.row > 0 && m.rows[m.row].kind == rowRedirect {
-				m.row--
-			}
-			m.normalizeCursor()
-		}
+		m.normalizeCursor()
 	case key.Matches(msg, detailKeys.Help):
 		m.helpVisible = !m.helpVisible
 	case msg.String() == "&":
@@ -994,9 +1049,31 @@ func (m *detailModel) setCell(s string) {
 		return
 	}
 	if m.col == 0 {
+		if m.rows[m.row].kind == rowArg {
+			s = normalizeFlagNameInput(s)
+		}
 		m.rows[m.row].name = s
 	} else {
 		m.rows[m.row].value = s
+	}
+}
+
+func normalizeFlagNameInput(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.HasPrefix(s, "-") {
+		return s
+	}
+	return "--" + s
+}
+
+func rotateFlagPrefix(s string) string {
+	switch {
+	case strings.HasPrefix(s, "--"):
+		return "-" + strings.TrimPrefix(s, "--")
+	case strings.HasPrefix(s, "-"):
+		return strings.TrimPrefix(s, "-")
+	default:
+		return "--" + s
 	}
 }
 
@@ -1373,19 +1450,21 @@ func (m detailModel) View() string {
 	b.WriteString(hintStyle.Render(fmt.Sprintf("  %s  •  %s", last.RunAt.Format("02/01/2006 15:04:05"), last.Cwd)) + "\n\n")
 	env := m.liveEnv()
 
-	b.WriteString(fmt.Sprintf("  %s  %s\n",
-		cellHeader.Render(padStr("env var", colNameW)),
-		cellHeader.Render(padStr("value", colValueW)),
-	))
-	b.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("178")).Render(strings.Repeat("─", colNameW+colValueW+4)) + "\n")
-	for r, dr := range m.rows {
-		if dr.kind != rowEnv {
-			continue
+	if m.envVisible {
+		b.WriteString(fmt.Sprintf("  %s  %s\n",
+			cellHeader.Render(padStr("env var", colNameW)),
+			cellHeader.Render(padStr("value", colValueW)),
+		))
+		b.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("178")).Render(strings.Repeat("─", colNameW+colValueW+4)) + "\n")
+		for r, dr := range m.rows {
+			if dr.kind != rowEnv {
+				continue
+			}
+			b.WriteString(m.renderRow(r, dr, env) + "\n")
 		}
-		b.WriteString(m.renderRow(r, dr, env) + "\n")
+		b.WriteString("\n")
 	}
 
-	b.WriteString("\n")
 	b.WriteString(sectionStyle.Render("  Command") + "\n")
 	for r, dr := range m.rows {
 		if dr.kind != rowCommand {
@@ -1469,10 +1548,10 @@ func (m detailModel) helpBar() string {
 		b.WriteString("\n")
 	} else if m.helpVisible {
 		b.WriteString(hintStyle.Render("  hjkl/arrows: navigate  •  i/enter: edit  •  ci: change cell  •  a: add row  •  dd: delete row  •  u: undo") + "\n")
-		b.WriteString(hintStyle.Render("  m: merge flag back  •  M: push flag forward  •  space: toggle row  •  s: secret  •  S: save") + "\n")
-		b.WriteString(hintStyle.Render("  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  r: redirects  •  esc: back  •  q: quit  •  ?: hide") + "\n")
+		b.WriteString(hintStyle.Render("  m: merge flag back  •  M: push flag forward  •  space: toggle row/flag prefix  •  s: secret  •  S: save") + "\n")
+		b.WriteString(hintStyle.Render("  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  E: env  •  r: redirects  •  esc: back  •  q: quit  •  ?: hide") + "\n")
 	} else {
-		b.WriteString(hintStyle.Render("  hjkl: navigate  •  i: edit  •  a: add row  •  dd: delete  •  m/M: move flag  •  S: save  •  x: exec  •  r: redirects  •  ?: more") + "\n")
+		b.WriteString(hintStyle.Render("  hjkl: navigate  •  i: edit  •  a: add row  •  dd: delete  •  m/M: move flag  •  S: save  •  x: exec  •  E: env  •  r: redirects  •  ?: more") + "\n")
 	}
 	return b.String()
 }
