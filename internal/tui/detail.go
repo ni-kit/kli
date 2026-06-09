@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	colNameW  = 22
-	colValueW = 36
+	colNameW             = 22
+	colValueW            = 36
+	maxVisibleRunHistory = 10
 )
 
 var (
@@ -1430,8 +1431,15 @@ func (m detailModel) View() string {
 	if len(m.inv.Runs) > 1 {
 		b.WriteString("\n")
 		b.WriteString(sectionStyle.Render("  Run history") + "\n")
-		for _, r := range m.inv.Runs {
+		runs := m.inv.Runs
+		if len(runs) > maxVisibleRunHistory {
+			runs = runs[:maxVisibleRunHistory]
+		}
+		for _, r := range runs {
 			b.WriteString(locationStyle.Render(fmt.Sprintf("    • %s  %s", r.RunAt.Format("02/01/2006 15:04:05"), r.Cwd)) + "\n")
+		}
+		if older := len(m.inv.Runs) - len(runs); older > 0 {
+			b.WriteString(hintStyle.Render(fmt.Sprintf("    + %d older runs", older)) + "\n")
 		}
 	}
 
