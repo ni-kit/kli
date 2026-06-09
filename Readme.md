@@ -122,6 +122,8 @@ Press `/` to open the search bar. Filters are ANDed. Free text matches anywhere 
 
 `enter` confirms the filter and returns to navigation. `esc` clears the filter.
 
+In detail/edit view, value cells show up to three completion suggestions while editing. `tab` accepts the first suggestion.
+
 ## Detail / edit view
 
 Opens when you press `enter` on a history entry. Shows leading env vars, the command, args and flags as editable fields.
@@ -134,7 +136,7 @@ Opens when you press `enter` on a history entry. Shows leading env vars, the com
 | `enter` | Edit cell / run (on exec button) |
 | `a` | Add row below |
 | `dd` | Delete row |
-| `space` | Toggle row (excluded from exec/copy) |
+| `space` | Toggle row; on a flag/name cell, rotate `--flag` / `-flag` / `flag` |
 | `s` | Toggle secret (value hidden in copy) |
 | `S` | Save changes without executing |
 | `y` | Copy cell to clipboard |
@@ -143,11 +145,14 @@ Opens when you press `enter` on a history entry. Shows leading env vars, the com
 | `m` | Merge flag into previous row |
 | `M` | Push flag/value to next row |
 | `u` | Undo last edit |
+| `E` | Toggle env var rows |
 | `r` | Toggle stdout/stderr redirects |
 | `x` | Exec command |
 | `esc` | Back to history list |
 
-Leading `KEY=value` env vars are stored with the command and set when executing it. Env vars and leading `~` in values are expanded on exec and previewed inline (e.g. `$HOME` or `~/src`).
+Leading `KEY=value` env vars are stored with the command and set when executing it. Env vars and leading `~` in values are expanded on exec and previewed inline (e.g. `$HOME` or `~/src`). Env rows are hidden by default when empty; press `E` to show them.
+
+When editing a flag/name cell, bare text is treated as a long flag (`verbose` becomes `--verbose`). Press `space` on that cell to rotate between long flag, short flag, and no prefix.
 
 `m` and `M` reorganize how flags and values are split across rows — useful for clustering short flags (e.g. merging `-v` and `-x` into `-vx`) or splitting them apart.
 
