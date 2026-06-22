@@ -15,8 +15,15 @@ type Run struct {
 	Metadata map[string]string `json:",omitempty"`
 }
 
-// MetaTMUXPane is the metadata key under which a run's tmux pane id is stored.
-const MetaTMUXPane = "TMUX_PANE"
+// Metadata keys under which a run's terminal-pane identity is stored.
+const (
+	// MetaTMUXPane is the tmux pane id (e.g. "%7").
+	MetaTMUXPane = "TMUX_PANE"
+	// MetaZellijPane and MetaZellijSession together identify a zellij pane;
+	// the pane id is only unique within a session.
+	MetaZellijPane    = "ZELLIJ_PANE_ID"
+	MetaZellijSession = "ZELLIJ_SESSION_NAME"
+)
 
 // Meta returns the metadata value for key, or "" if absent.
 func (r Run) Meta(key string) string {
@@ -357,6 +364,27 @@ func (inv Invocation) LastRunInDir(cwd string) (Run, bool) {
 func (inv Invocation) LastRunWithMeta(key, value string) (Run, bool) {
 	for _, run := range inv.Runs {
 		if run.Meta(key) == value {
+			return run, true
+		}
+	}
+	return Run{}, false
+}
+
+// LastRunWithMetaAll returns the newest run whose metadata matches every
+// key/value pair in want. An empty want matches nothing.
+func (inv Invocation) LastRunWithMetaAll(want map[string]string) (Run, bool) {
+	if len(want) == 0 {
+		return Run{}, false
+	}
+	for _, run := range inv.Runs {
+		match := true
+		for k, v := range want {
+			if run.Meta(k) != v {
+				match = false
+				break
+			}
+		}
+		if match {
 			return run, true
 		}
 	}

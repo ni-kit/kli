@@ -152,10 +152,29 @@ func NewBlankInvocation() domain.Invocation {
 }
 
 // currentRunMetadata captures optional contextual metadata for a new run from
-// the environment. Currently records TMUX_PANE when running inside tmux.
+// the environment: the tmux or zellij pane the command ran in.
 func currentRunMetadata() map[string]string {
+	return currentPaneScope()
+}
+
+// CurrentPaneScope returns the metadata identifying the current terminal pane,
+// or nil when not inside tmux or zellij. Exported for recording exec runs.
+func CurrentPaneScope() map[string]string { return currentPaneScope() }
+
+// currentPaneScope returns the metadata identifying the current terminal pane,
+// or nil when not running inside tmux or zellij. tmux panes are identified by
+// TMUX_PANE alone; zellij panes require both the pane id and session name,
+// since pane ids are only unique within a session.
+func currentPaneScope() map[string]string {
 	if pane := os.Getenv(domain.MetaTMUXPane); pane != "" {
 		return map[string]string{domain.MetaTMUXPane: pane}
+	}
+	if pane := os.Getenv(domain.MetaZellijPane); pane != "" {
+		scope := map[string]string{domain.MetaZellijPane: pane}
+		if session := os.Getenv(domain.MetaZellijSession); session != "" {
+			scope[domain.MetaZellijSession] = session
+		}
+		return scope
 	}
 	return nil
 }

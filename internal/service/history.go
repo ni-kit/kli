@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/ni-kit/kli/internal/domain"
 	"github.com/ni-kit/kli/internal/repo"
@@ -75,10 +74,10 @@ func (s *historyService) Latest(cwd string, currentDirOnly bool) (*domain.Invoca
 		return nil, fmt.Errorf("kli: no history yet")
 	}
 
-	// Inside a tmux pane, auto-scope to the last command run in THIS pane.
-	if pane := os.Getenv(domain.MetaTMUXPane); pane != "" {
+	// Inside a tmux/zellij pane, auto-scope to the last command run in THIS pane.
+	if scope := currentPaneScope(); scope != nil {
 		if best, ok := latestByRun(invs, func(inv domain.Invocation) (domain.Run, bool) {
-			return inv.LastRunWithMeta(domain.MetaTMUXPane, pane)
+			return inv.LastRunWithMetaAll(scope)
 		}); ok {
 			return best, nil
 		}
