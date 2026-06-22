@@ -84,9 +84,13 @@ kli --import
 | `kli -tey` | Execute the alternative toggle command without asking, then print the updated state |
 | `kli --import` | Import shell history from zsh, bash, fish, or sh history files |
 
+### tmux pane scoping
+
+When run inside tmux, `kli` records the `TMUX_PANE` of each command. The latest-entry commands (`kli -l`/`-lx`/`-lxy`/`-le`) then automatically resolve to the most recent command run in the **current pane**, so each pane re-runs its own last command. Outside tmux this falls back to global (or, with a trailing `.`, current-directory) scoping.
+
 ## Installation
 
-```sh 
+```sh
 go install github.com/ni-kit/kli/cmd/kli
 ```
 
@@ -136,7 +140,8 @@ Opens when you press `enter` on a history entry. Shows leading env vars, the com
 | `enter` | Edit cell / run (on exec button) |
 | `a` | Add row below |
 | `dd` | Delete row |
-| `space` | Toggle row; on a flag/name cell, rotate `--flag` / `-flag` / `flag` |
+| `space` | Disable/enable row (struck-through rows are excluded from exec) |
+| `f` | On a flag/name cell, rotate `--flag` / `-flag` / `flag` |
 | `s` | Toggle secret (value hidden in copy) |
 | `S` | Save changes without executing |
 | `y` | Copy cell to clipboard |
@@ -152,7 +157,7 @@ Opens when you press `enter` on a history entry. Shows leading env vars, the com
 
 Leading `KEY=value` env vars are stored with the command and set when executing it. Env vars and leading `~` in values are expanded on exec and previewed inline (e.g. `$HOME` or `~/src`). Env rows are hidden by default when empty; press `E` to show them.
 
-When editing a flag/name cell, bare text is treated as a long flag (`verbose` becomes `--verbose`). Press `space` on that cell to rotate between long flag, short flag, and no prefix.
+When editing a flag/name cell, bare text is treated as a long flag (`verbose` becomes `--verbose`). Press `f` on that cell to rotate between long flag, short flag, and no prefix. Press `space` on any flag or value row to strike it through and exclude it from execution.
 
 `m` and `M` reorganize how flags and values are split across rows — useful for clustering short flags (e.g. merging `-v` and `-x` into `-vx`) or splitting them apart.
 
@@ -183,6 +188,9 @@ Redirect operators in shell history (`>file`, `>>file`, `2>&1`, `2>/dev/null`, e
 
 ## TODO
 
+- [ ] make toggle not binary, when hitting T on toggle circle element uncheck it (remove from the array) and reorder circle
+- [ ] think about forcing toggle through non-zero exit code (to 'reset' state)
+- [ ] cleanup main (extract logic to pkgs, libs and services where possible)
 - [ ] add step result preview (one liner builder)
 - [ ] add tldr support
 - [ ] subcmd preview (like env vars)

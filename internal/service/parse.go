@@ -42,7 +42,7 @@ func parseWithTime(argv []string, t time.Time, cwd string) domain.Invocation {
 	segs := splitChainSegments(argv)
 	inv := parseSegmentTokens(segs[0].tokens)
 	inv.ID = newID()
-	inv.Runs = []domain.Run{{RunAt: t, Cwd: cwd}}
+	inv.Runs = []domain.Run{{RunAt: t, Cwd: cwd, Metadata: currentRunMetadata()}}
 	for _, seg := range segs[1:] {
 		if len(seg.tokens) == 0 {
 			continue
@@ -147,8 +147,17 @@ func NewBlankInvocation() domain.Invocation {
 	cwd, _ := os.Getwd()
 	return domain.Invocation{
 		ID:   newID(),
-		Runs: []domain.Run{{RunAt: time.Now(), Cwd: cwd}},
+		Runs: []domain.Run{{RunAt: time.Now(), Cwd: cwd, Metadata: currentRunMetadata()}},
 	}
+}
+
+// currentRunMetadata captures optional contextual metadata for a new run from
+// the environment. Currently records TMUX_PANE when running inside tmux.
+func currentRunMetadata() map[string]string {
+	if pane := os.Getenv(domain.MetaTMUXPane); pane != "" {
+		return map[string]string{domain.MetaTMUXPane: pane}
+	}
+	return nil
 }
 
 // extractRedirects scans tokens for shell redirect operators, removes them from

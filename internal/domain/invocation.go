@@ -10,6 +10,20 @@ import (
 type Run struct {
 	RunAt time.Time
 	Cwd   string
+	// Metadata holds optional contextual key/values captured at record time,
+	// e.g. "TMUX_PANE" identifying the tmux pane the command ran in.
+	Metadata map[string]string `json:",omitempty"`
+}
+
+// MetaTMUXPane is the metadata key under which a run's tmux pane id is stored.
+const MetaTMUXPane = "TMUX_PANE"
+
+// Meta returns the metadata value for key, or "" if absent.
+func (r Run) Meta(key string) string {
+	if r.Metadata == nil {
+		return ""
+	}
+	return r.Metadata[key]
 }
 
 type ChainOp string
@@ -333,6 +347,16 @@ func (inv Invocation) HasTag(tag string) bool {
 func (inv Invocation) LastRunInDir(cwd string) (Run, bool) {
 	for _, run := range inv.Runs {
 		if run.Cwd == cwd {
+			return run, true
+		}
+	}
+	return Run{}, false
+}
+
+// LastRunWithMeta returns the newest run whose metadata[key] == value.
+func (inv Invocation) LastRunWithMeta(key, value string) (Run, bool) {
+	for _, run := range inv.Runs {
+		if run.Meta(key) == value {
 			return run, true
 		}
 	}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/ni-kit/kli/internal/domain"
 	"github.com/ni-kit/kli/internal/repo"
@@ -73,13 +74,35 @@ func (s *historyService) Latest(cwd string, currentDirOnly bool) (*domain.Invoca
 	if len(invs) == 0 {
 		return nil, fmt.Errorf("kli: no history yet")
 	}
+
+	// Inside a tmux pane, auto-scope to the last command run in THIS pane.
+	if pane := os.Getenv(domain.MetaTMUXPane); pane != "" {
+		if best, ok := latestByRun(invs, func(inv domain.Invocation) (domain.Run, bool) {
+			return inv.LastRunWithMeta(domain.MetaTMUXPane, pane)
+		}); ok {
+			return best, nil
+		}
+		// No history for this pane; fall through to dir/global behavior.
+	}
+
 	if !currentDirOnly {
 		return &invs[0], nil
 	}
+	best, ok := latestByRun(invs, func(inv domain.Invocation) (domain.Run, bool) {
+		return inv.LastRunInDir(cwd)
+	})
+	if !ok {
+		return nil, fmt.Errorf("kli: no history for current directory")
+	}
+	return best, nil
+}
+
+// latestByRun returns the invocation whose matching run (per pick) is newest.
+func latestByRun(invs []domain.Invocation, pick func(domain.Invocation) (domain.Run, bool)) (*domain.Invocation, bool) {
 	var best *domain.Invocation
 	var bestRun domain.Run
 	for i := range invs {
-		run, ok := invs[i].LastRunInDir(cwd)
+		run, ok := pick(invs[i])
 		if !ok {
 			continue
 		}
@@ -88,10 +111,7 @@ func (s *historyService) Latest(cwd string, currentDirOnly bool) (*domain.Invoca
 			bestRun = run
 		}
 	}
-	if best == nil {
-		return nil, fmt.Errorf("kli: no history for current directory")
-	}
-	return best, nil
+	return best, best != nil
 }
 
 func (s *historyService) SaveLayout(invID string, env []domain.EnvVar, args []domain.Arg) error {

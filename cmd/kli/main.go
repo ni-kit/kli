@@ -474,7 +474,11 @@ func runApp(app *tui.App, historySvc service.HistoryService) {
 		cwd, _ := os.Getwd()
 		toRecord := inv
 		toRecord.ID = fmt.Sprintf("%d", time.Now().UnixNano())
-		toRecord.Runs = []domain.Run{{RunAt: time.Now(), Cwd: cwd}}
+		run := domain.Run{RunAt: time.Now(), Cwd: cwd}
+		if pane := os.Getenv(domain.MetaTMUXPane); pane != "" {
+			run.Metadata = map[string]string{domain.MetaTMUXPane: pane}
+		}
+		toRecord.Runs = []domain.Run{run}
 		if err := historySvc.Record(toRecord); err != nil {
 			fmt.Fprintln(os.Stderr, "kli: failed to save history:", err)
 		}

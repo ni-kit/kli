@@ -71,6 +71,7 @@ var (
 		X:           key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "exec")),
 		Undo:        key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "undo")),
 		ToggleRow:   key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle row")),
+		FlagPrefix:  key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "rotate flag prefix")),
 		ToggleValue: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "secret value")),
 		Save:        key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "save")),
 		PushCell:    key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "push cell to next line")),
@@ -115,6 +116,7 @@ type detailKeyMap struct {
 	X           key.Binding
 	Undo        key.Binding
 	ToggleRow   key.Binding
+	FlagPrefix  key.Binding
 	ToggleValue key.Binding
 	Save        key.Binding
 	PushCell    key.Binding
@@ -925,11 +927,13 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 	case key.Matches(msg, detailKeys.ToggleRow):
 		if !m.onButton() && m.rows[m.row].kind == rowRedirect {
 			m.rows[m.row].redirect = m.rows[m.row].redirect.Next()
-		} else if !m.onButton() && m.rows[m.row].kind == rowArg && m.col == 0 && m.rows[m.row].name != "" {
-			m.undo = &undoEntry{row: m.row, col: m.col, value: m.currentCell()}
-			m.rows[m.row].name = rotateFlagPrefix(m.rows[m.row].name)
 		} else if !m.onButton() && !m.onCommandRow() {
 			m.rows[m.row].disabled = !m.rows[m.row].disabled
+		}
+	case key.Matches(msg, detailKeys.FlagPrefix):
+		if !m.onButton() && m.rows[m.row].kind == rowArg && m.col == 0 && m.rows[m.row].name != "" {
+			m.undo = &undoEntry{row: m.row, col: m.col, value: m.currentCell()}
+			m.rows[m.row].name = rotateFlagPrefix(m.rows[m.row].name)
 		}
 	case key.Matches(msg, detailKeys.ToggleValue):
 		if !m.onButton() && !m.onCommandRow() && m.rows[m.row].kind != rowRedirect {
@@ -1080,6 +1084,7 @@ func (m detailModel) startEditing(initial string) (detailModel, tea.Cmd) {
 	m.normalizeCursor()
 	m.mode = modeEditing
 	m.input.SetValue(initial)
+	m.input.CursorEnd()
 	cmd := m.input.Focus()
 	return m, cmd
 }
@@ -1559,7 +1564,7 @@ func (m detailModel) helpBar() string {
 		b.WriteString("\n")
 	} else if m.helpVisible {
 		b.WriteString(hintStyle.Render("  hjkl/arrows: navigate  •  i/enter: edit  •  ci: change cell  •  a: add row  •  dd: delete row  •  u: undo") + "\n")
-		b.WriteString(hintStyle.Render("  m: merge flag back  •  M: push flag forward  •  space: toggle row/flag prefix  •  s: secret  •  S: save") + "\n")
+		b.WriteString(hintStyle.Render("  m: merge flag back  •  M: push flag forward  •  space: disable row  •  f: flag prefix  •  s: secret  •  S: save") + "\n")
 		b.WriteString(hintStyle.Render("  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  E: env  •  r: redirects  •  esc: back  •  q: quit  •  ?: hide") + "\n")
 	} else {
 		b.WriteString(hintStyle.Render("  hjkl: navigate  •  i: edit  •  a: add row  •  dd: delete  •  m/M: move flag  •  S: save  •  x: exec  •  E: env  •  r: redirects  •  ?: more") + "\n")
