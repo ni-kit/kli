@@ -60,8 +60,11 @@ type Invocation struct {
 	Chain   []ChainLink // subsequent commands; nil = simple single command
 	Runs    []Run       // newest-first
 	Tags    []string
-	Stdout  StreamRedirect
-	Stderr  StreamRedirect
+	// Parent is the CommandFingerprint of the invocation this one was edited
+	// from, empty when the command was not derived from another.
+	Parent string `json:",omitempty"`
+	Stdout StreamRedirect
+	Stderr StreamRedirect
 }
 
 type EnvVar struct {
@@ -349,6 +352,45 @@ func (inv Invocation) FlagSetFingerprint() string {
 
 func (inv Invocation) HasTag(tag string) bool {
 	return slices.Contains(inv.Tags, tag)
+}
+
+func (inv Invocation) ArgDisplayTokens() []string {
+	tokens := make([]string, len(inv.Args))
+	for i, a := range inv.Args {
+		tokens[i] = a.Display()
+	}
+	return tokens
+}
+
+func ArgTokenSimilarity(a, b []string) (float64, []bool) {
+	maxLen := maxInt(len(a), len(b))
+	if maxLen == 0 {
+		return 0, nil
+	}
+	matches := 0
+	diffMask := make([]bool, maxLen)
+	for i := range maxLen {
+		var va, vb string
+		if i < len(a) {
+			va = a[i]
+		}
+		if i < len(b) {
+			vb = b[i]
+		}
+		if va == vb {
+			matches++
+		} else {
+			diffMask[i] = true
+		}
+	}
+	return float64(matches) / float64(maxLen), diffMask
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (inv Invocation) LastRunInDir(cwd string) (Run, bool) {

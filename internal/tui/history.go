@@ -5,6 +5,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -16,16 +17,22 @@ import (
 )
 
 type invItem struct {
-	inv          domain.Invocation
-	toggleMarker string
+	inv               domain.Invocation
+	toggleMarker      string
+	diffMask          []bool
+	styledArgsPreview string
 }
 
 func (i invItem) Title() string {
+	args := i.inv.ArgsPreview()
+	if i.styledArgsPreview != "" {
+		args = i.styledArgsPreview
+	}
 	return fmt.Sprintf("%s%s%-10s  %s%s%s",
 		i.toggleMarker,
 		envDot(i.inv),
 		i.inv.Command,
-		i.inv.ArgsPreview(),
+		args,
 		chainListSummary(i.inv.Chain),
 		renderTags(i.inv.Tags),
 	)
@@ -77,6 +84,7 @@ var (
 	envDotStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("178"))
 	toggleCur    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("113"))
 	toggleAlt    = lipgloss.NewStyle().Foreground(lipgloss.Color("178"))
+	argDiffStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("215"))
 
 	tagColors = []lipgloss.Style{
 		lipgloss.NewStyle().Foreground(lipgloss.Color("178")), // yellow
@@ -147,6 +155,41 @@ func renderTags(tags []string) string {
 	}
 	b.WriteString(tagEditStyle.Render("]"))
 	return b.String()
+}
+
+func buildStyledArgsPreview(inv domain.Invocation, diffMask []bool) string {
+	tokens := inv.ArgDisplayTokens()
+	if len(tokens) == 0 {
+		return ""
+	}
+	limit := 47
+	var parts []string
+	runeCount := 0
+	truncated := false
+	for i, t := range tokens {
+		prefix := ""
+		if i > 0 {
+			prefix = " "
+		}
+		if runeCount+len(prefix)+len(t) > limit {
+			truncated = true
+			break
+		}
+		runeCount += len(prefix) + len(t)
+		styled := t
+		if i < len(diffMask) && diffMask[i] {
+			styled = argDiffStyle.Render(t)
+		}
+		if i > 0 {
+			styled = " " + styled
+		}
+		parts = append(parts, styled)
+	}
+	s := strings.Join(parts, "")
+	if truncated {
+		s += "…"
+	}
+	return s
 }
 
 const previewLines = 3 // title + 2 content rows
@@ -231,14 +274,94 @@ func (m *historyModel) applyFilter() {
 		q.Sort(m.filtered)
 	}
 
-	items := make([]list.Item, len(m.filtered))
+	items := make([]invItem, len(m.filtered))
 	for i, inv := range m.filtered {
 		items[i] = invItem{inv: inv, toggleMarker: m.toggleMarker(inv)}
 	}
-	m.list.SetItems(items)
+	m.computeSimilarityGroups(items)
+
+	listItems := make([]list.Item, len(items))
+	for i := range items {
+		listItems[i] = items[i]
+	}
+	m.list.SetItems(listItems)
 	if selected.valid() {
 		m.selectInvocationRef(selected)
 	}
+}
+
+type similarityCandidate struct {
+	inv    domain.Invocation
+	tokens []string
+}
+
+func (m *historyModel) computeSimilarityGroups(items []invItem) {
+	if len(items) == 0 || len(m.allInvocations) < 2 {
+		return
+	}
+	groups := m.groupAllInvocations()
+	for i := range items {
+		key := groupKey(items[i].inv)
+		candidates := groups[key]
+		if len(candidates) < 2 {
+			continue
+		}
+		aTok := items[i].inv.ArgDisplayTokens()
+		var bestMask []bool
+		var bestRun time.Time
+		var bestInCwd bool
+		found := false
+		for _, candidate := range candidates {
+			if (items[i].inv.ID != "" && candidate.inv.ID == items[i].inv.ID) ||
+				candidate.inv.CommandFingerprint() == items[i].inv.CommandFingerprint() {
+				continue
+			}
+			ratio, mask := domain.ArgTokenSimilarity(aTok, candidate.tokens)
+			if ratio < 0.8 {
+				continue
+			}
+			run, inCwd := candidate.inv.LastRunInDir(m.cwd)
+			if !inCwd {
+				run = candidate.inv.LastRun()
+			}
+			if !found || betterSimilarityReference(inCwd, run.RunAt, bestInCwd, bestRun) {
+				bestMask = mask
+				bestRun = run.RunAt
+				bestInCwd = inCwd
+				found = true
+			}
+		}
+		if found {
+			items[i].diffMask = bestMask
+			items[i].styledArgsPreview = buildStyledArgsPreview(items[i].inv, bestMask)
+		}
+	}
+}
+
+func betterSimilarityReference(inCwd bool, runAt time.Time, bestInCwd bool, bestRunAt time.Time) bool {
+	if inCwd != bestInCwd {
+		return inCwd
+	}
+	return runAt.After(bestRunAt)
+}
+
+func (m *historyModel) groupAllInvocations() map[string][]similarityCandidate {
+	groups := make(map[string][]similarityCandidate)
+	for _, inv := range m.allInvocations {
+		key := groupKey(inv)
+		groups[key] = append(groups[key], similarityCandidate{
+			inv:    inv,
+			tokens: inv.ArgDisplayTokens(),
+		})
+	}
+	return groups
+}
+
+func groupKey(inv domain.Invocation) string {
+	tags := make([]string, len(inv.Tags))
+	copy(tags, inv.Tags)
+	slices.Sort(tags)
+	return inv.Command + "\x00" + strings.Join(tags, ",")
 }
 
 func (m historyModel) toggleMarker(inv domain.Invocation) string {
@@ -411,8 +534,14 @@ func (m historyModel) View() string {
 			if maxW < 10 {
 				maxW = 10
 			}
-			preview := wrapText(inv.FullCommand(), maxW)[0] // first line only
-			b.WriteString(previewStyle.Render("  "+preview) + "\n")
+			var preview string
+			if item := m.selectedItem(); item != nil && item.diffMask != nil {
+				preview = buildStyledCommandPreview(*inv, item.diffMask, maxW)
+				b.WriteString("  " + preview + "\n")
+			} else {
+				preview = wrapText(inv.FullCommand(), maxW)[0]
+				b.WriteString(previewStyle.Render("  "+preview) + "\n")
+			}
 			hint := "  enter: edit  •  x: exec  •  /: search  •  t: edit tags  •  T: add toggle  •  dd: delete"
 			if m.pendingD {
 				b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("  dd: press d again to confirm delete") + "\n")
@@ -447,6 +576,88 @@ func (m historyModel) selectedInvocation() *domain.Invocation {
 	}
 	ii := item.(invItem)
 	return &ii.inv
+}
+
+func (m historyModel) selectedItem() *invItem {
+	item := m.list.SelectedItem()
+	if item == nil {
+		return nil
+	}
+	ii := item.(invItem)
+	return &ii
+}
+
+func buildStyledCommandPreview(inv domain.Invocation, diffMask []bool, maxWidth int) string {
+	var b strings.Builder
+	visible := 0
+	truncated := false
+	addToken := func(token, styled string) bool {
+		if token == "" {
+			return true
+		}
+		sep := 0
+		if visible > 0 {
+			sep = 1
+		}
+		if visible+sep+len(token) > maxWidth {
+			if !truncated && visible < maxWidth {
+				b.WriteString(previewStyle.Render("…"))
+			}
+			truncated = true
+			return false
+		}
+		if sep > 0 {
+			b.WriteString(" ")
+		}
+		b.WriteString(styled)
+		visible += sep + len(token)
+		return true
+	}
+
+	for _, e := range inv.Env {
+		token := e.Display()
+		if !addToken(token, previewStyle.Render(token)) {
+			return b.String()
+		}
+	}
+	if !addToken(inv.Command, previewStyle.Render(inv.Command)) {
+		return b.String()
+	}
+
+	tokens := inv.ArgDisplayTokens()
+	for i, t := range tokens {
+		styled := t
+		if i < len(diffMask) && diffMask[i] {
+			styled = argDiffStyle.Render(t)
+		} else {
+			styled = previewStyle.Render(t)
+		}
+		if !addToken(t, styled) {
+			return b.String()
+		}
+	}
+	if s := inv.Stdout.StdoutShell(); s != "" {
+		if !addToken(s, previewStyle.Render(s)) {
+			return b.String()
+		}
+	}
+	if s := inv.Stderr.StderrShell(); s != "" {
+		if !addToken(s, previewStyle.Render(s)) {
+			return b.String()
+		}
+	}
+	for _, link := range inv.Chain {
+		op := string(link.Op)
+		if !addToken(op, previewStyle.Render(op)) {
+			return b.String()
+		}
+		for _, token := range strings.Fields(link.DisplayCommand()) {
+			if !addToken(token, previewStyle.Render(token)) {
+				return b.String()
+			}
+		}
+	}
+	return b.String()
 }
 
 func (m *historyModel) selectInvocationRef(ref commandRef) {

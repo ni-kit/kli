@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -78,6 +80,8 @@ var (
 		MergeBack:   key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "merge flag into previous row")),
 		Env:         key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "toggle env")),
 		Redirects:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "toggle redirects")),
+		Tags:        key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "edit tags")),
+		TagsAll:     key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "toggle all tags")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
 	}
 )
@@ -98,6 +102,7 @@ type detailMode int
 const (
 	modeNormal detailMode = iota
 	modeEditing
+	modeEditTags
 )
 
 type detailKeyMap struct {
@@ -123,6 +128,8 @@ type detailKeyMap struct {
 	MergeBack   key.Binding
 	Env         key.Binding
 	Redirects   key.Binding
+	Tags        key.Binding
+	TagsAll     key.Binding
 	Help        key.Binding
 }
 
@@ -312,6 +319,11 @@ type detailModel struct {
 	cArmed           bool
 	dArmed           bool
 	input            textinput.Model
+	tagInput         textinput.Model
+	cwd              string
+	tags             []string
+	droppedTags      []string // tags T removed, restored by pressing T again
+	tagsForced       bool     // T pressed: keep m.tags even though the command was forked
 	execRequested    bool
 	undo             *undoEntry
 	copied           bool
@@ -435,6 +447,12 @@ func newDetailModel(inv domain.Invocation, width, height int) detailModel {
 	ti := textinput.New()
 	ti.CharLimit = 256
 
+	tagIn := textinput.New()
+	tagIn.CharLimit = 256
+	tagIn.Placeholder = "tag name"
+
+	cwd, _ := os.Getwd()
+
 	segs := inv.AllSegments()
 	segRows := make([][]displayRow, len(segs))
 	for i, seg := range segs {
@@ -461,6 +479,9 @@ func newDetailModel(inv domain.Invocation, width, height int) detailModel {
 		chainIdx:         0,
 		segRows:          segRows,
 		input:            ti,
+		tagInput:         tagIn,
+		cwd:              cwd,
+		tags:             slices.Clone(inv.Tags),
 		envVisible:       hasNonEmptyEnv(inv),
 		redirectsVisible: redirectsVisible,
 	}
@@ -521,7 +542,15 @@ func (m detailModel) buildLiveInvocation() domain.Invocation {
 		Stdout:  redirectFromRows(allRows[0], "stdout"),
 		Stderr:  redirectFromRows(allRows[0], "stderr"),
 		Runs:    m.inv.Runs,
-		Tags:    m.inv.Tags,
+		Tags:    m.tags,
+	}
+	if m.isFork(inv.Command) {
+		// Forked off another command: the origin is recorded, and tags are not
+		// inherited unless T explicitly kept them.
+		inv.Parent = m.inv.CommandFingerprint()
+		if !m.tagsForced {
+			inv.Tags = nil
+		}
 	}
 	for i := 1; i < len(allRows) && i-1 < len(m.inv.Chain); i++ {
 		origLink := m.inv.Chain[i-1]
@@ -717,7 +746,7 @@ func (m detailModel) completions() []service.CompletionSuggestion {
 	return service.CompleteInputs(service.CompletionOptions{
 		Value:       m.input.Value(),
 		LocalEnv:    m.localEnvNames(),
-		Cwd:         m.inv.LastRun().Cwd,
+		Cwd:         m.cwd,
 		EnableEnv:   true,
 		EnableFiles: m.fileCompletionEnabled(),
 	})
@@ -757,7 +786,7 @@ func (m detailModel) completionDropdown() string {
 	return b.String()
 }
 
-func (m detailModel) IsEditing() bool { return m.mode == modeEditing }
+func (m detailModel) IsEditing() bool { return m.mode == modeEditing || m.mode == modeEditTags }
 
 // WithCommandEditing positions the cursor on the command row and opens it for
 // editing immediately — used when creating a new blank command.
@@ -775,8 +804,11 @@ func (m detailModel) WithCommandEditing() (detailModel, tea.Cmd) {
 func (m detailModel) Update(msg tea.Msg) (detailModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		if m.mode == modeEditing {
+		switch m.mode {
+		case modeEditing:
 			return m.updateEditing(msg)
+		case modeEditTags:
+			return m.updateEditTags(msg)
 		}
 		return m.updateNormal(msg)
 	case copiedMsg:
@@ -786,13 +818,38 @@ func (m detailModel) Update(msg tea.Msg) (detailModel, tea.Cmd) {
 		m.saved = false
 		return m, nil
 	default:
-		if m.mode == modeEditing {
+		switch m.mode {
+		case modeEditing:
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
+			return m, cmd
+		case modeEditTags:
+			var cmd tea.Cmd
+			m.tagInput, cmd = m.tagInput.Update(msg)
 			return m, cmd
 		}
 	}
 	return m, nil
+}
+
+func (m detailModel) updateEditTags(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.tags = parseTags(m.tagInput.Value())
+		// Typing tags by hand is an explicit choice; keep them even on a fork.
+		m.tagsForced = len(m.tags) > 0
+		m.droppedTags = nil
+		m.tagInput.Blur()
+		m.mode = modeNormal
+		return m, nil
+	case "esc":
+		m.tagInput.Blur()
+		m.mode = modeNormal
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.tagInput, cmd = m.tagInput.Update(msg)
+	return m, cmd
 }
 
 func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
@@ -991,6 +1048,19 @@ func (m detailModel) updateNormal(msg tea.KeyPressMsg) (detailModel, tea.Cmd) {
 	case key.Matches(msg, detailKeys.Redirects):
 		m.redirectsVisible = !m.redirectsVisible
 		m.normalizeCursor()
+	case key.Matches(msg, detailKeys.TagsAll):
+		if m.isFork(m.liveCurrentCommand()) {
+			m.tagsForced = !m.tagsForced
+		} else if len(m.tags) > 0 {
+			m.droppedTags, m.tags = m.tags, nil
+		} else {
+			m.tags, m.droppedTags = m.droppedTags, nil
+		}
+	case key.Matches(msg, detailKeys.Tags):
+		m.mode = modeEditTags
+		m.tagInput.SetValue(strings.Join(m.effectiveTags(), ", "))
+		m.tagInput.CursorEnd()
+		return m, m.tagInput.Focus()
 	case key.Matches(msg, detailKeys.Help):
 		m.helpVisible = !m.helpVisible
 	case msg.String() == "&":
@@ -1438,6 +1508,39 @@ func envHint(value string, env []string) string {
 	return "→ " + expanded
 }
 
+// isFork reports whether command differs from the invocation this detail view
+// was opened with, i.e. editing it will create a new history entry.
+func (m detailModel) isFork(command string) bool {
+	return m.inv.Command != "" && command != m.inv.Command
+}
+
+// effectiveTags returns the tags the invocation would be saved with.
+func (m detailModel) effectiveTags() []string {
+	if m.isFork(m.liveCurrentCommand()) && !m.tagsForced {
+		return nil
+	}
+	return m.tags
+}
+
+// tagLine renders the tag row under the header, in edit mode showing the input.
+func (m detailModel) tagLine() string {
+	if m.mode == modeEditTags {
+		return "  " + sectionStyle.Render("tags: ") + m.tagInput.View()
+	}
+	tags := m.effectiveTags()
+	if len(tags) == 0 {
+		if len(m.tags) > 0 {
+			return hintStyle.Render("  tags dropped on fork (T to keep, t to edit)")
+		}
+		return hintStyle.Render("  no tags (t to add)")
+	}
+	line := "  " + renderTags(tags)
+	if m.isFork(m.liveCurrentCommand()) {
+		line += hintStyle.Render("  kept from parent (T to drop)")
+	}
+	return line
+}
+
 func (m detailModel) View() string {
 	var b strings.Builder
 
@@ -1451,7 +1554,13 @@ func (m detailModel) View() string {
 		}
 	}
 	last := m.inv.LastRun()
-	b.WriteString(hintStyle.Render(fmt.Sprintf("  %s  •  %s", last.RunAt.Format("02/01/2006 15:04:05"), last.Cwd)) + "\n\n")
+	b.WriteString(hintStyle.Render(fmt.Sprintf("  last run %s  •  ", last.RunAt.Format("02/01/2006 15:04:05"))) +
+		locationStyle.Render(m.cwd) + "\n")
+	b.WriteString(m.tagLine() + "\n")
+	if m.inv.Parent != "" {
+		b.WriteString(hintStyle.Render("  forked from "+m.inv.Parent) + "\n")
+	}
+	b.WriteString("\n")
 	env := m.liveEnv()
 
 	if m.envVisible {
@@ -1554,7 +1663,7 @@ func (m detailModel) View() string {
 func (m detailModel) helpBar() string {
 	var b strings.Builder
 	b.WriteString("\n")
-	if m.mode == modeEditing {
+	if m.mode == modeEditing || m.mode == modeEditTags {
 		b.WriteString(hintStyle.Render("  enter: confirm  •  esc: cancel") + "\n")
 	} else if m.copied {
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("113")).Bold(true).Render("  ✓ copied!") + "\n")
@@ -1565,7 +1674,7 @@ func (m detailModel) helpBar() string {
 	} else if m.helpVisible {
 		b.WriteString(hintStyle.Render("  hjkl/arrows: navigate  •  i/enter: edit  •  ci: change cell  •  a: add row  •  dd: delete row  •  u: undo") + "\n")
 		b.WriteString(hintStyle.Render("  m: merge flag back  •  M: push flag forward  •  space: disable row  •  f: flag prefix  •  s: secret  •  S: save") + "\n")
-		b.WriteString(hintStyle.Render("  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  E: env  •  r: redirects  •  esc: back  •  q: quit  •  ?: hide") + "\n")
+		b.WriteString(hintStyle.Render("  y: copy cell  •  Y: copy cmd  •  p: paste  •  x: exec  •  E: env  •  r: redirects  •  t/T: tags  •  esc: back  •  q: quit  •  ?: hide") + "\n")
 	} else {
 		b.WriteString(hintStyle.Render("  hjkl: navigate  •  i: edit  •  a: add row  •  dd: delete  •  m/M: move flag  •  S: save  •  x: exec  •  E: env  •  r: redirects  •  ?: more") + "\n")
 	}

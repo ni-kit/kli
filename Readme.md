@@ -130,7 +130,7 @@ In detail/edit view, value cells show up to three completion suggestions while e
 
 ## Detail / edit view
 
-Opens when you press `enter` on a history entry. Shows leading env vars, the command, args and flags as editable fields.
+Opens when you press `enter` on a history entry. Shows leading env vars, the command, args and flags as editable fields. The header shows the last run time, the current working directory (not the directory of the last run), the command's tags, and the parent command when the entry was forked from another one.
 
 | Key | Action |
 |-----|--------|
@@ -152,6 +152,10 @@ Opens when you press `enter` on a history entry. Shows leading env vars, the com
 | `u` | Undo last edit |
 | `E` | Toggle env var rows |
 | `r` | Toggle stdout/stderr redirects |
+| `t` | Edit tags (comma-separated list) |
+| `T` | Toggle all tags on/off |
+| `&` / `\|` | Append a chained command segment (`&&` / pipe) |
+| `?` | Show/hide the extended help bar |
 | `x` | Exec command |
 | `esc` | Back to history list |
 
@@ -163,7 +167,11 @@ When editing a flag/name cell, bare text is treated as a long flag (`verbose` be
 
 ## Tags
 
-Press `t` on any history entry to open the tag editor. Enter a comma-separated list of tags and press `enter` to save. Clear the field and confirm to remove all tags. Same tag name always gets the same color across all entries.
+Press `t` on any history entry, or in the detail view, to open the tag editor. Enter a comma-separated list of tags and press `enter` to save. Clear the field and confirm to remove all tags. Same tag name always gets the same color across all entries.
+
+Press `T` in the detail view to toggle all tags at once: it strips every tag from the command, and pressing it again puts them back.
+
+Editing the command itself forks it into a new history entry. A fork does not inherit the original's tags, and records the parent command's fingerprint so the origin stays visible in the header. Press `T` on a fork to keep the parent's tags anyway (`T` again drops them); typing tags by hand also keeps them.
 
 ## Directory toggles
 
@@ -188,7 +196,7 @@ Redirect operators in shell history (`>file`, `>>file`, `2>&1`, `2>/dev/null`, e
 
 ## TODO
 
-- [ ] make toggle not binary, when hitting T on toggle circle element uncheck it (remove from the array) and reorder circle
+- [ ] make toggle not binary, when hitting {BINDING?} on toggle circle element uncheck it (remove from the array) and reorder circle
 - [ ] think about forcing toggle through non-zero exit code (to 'reset' state)
 - [ ] cleanup main (extract logic to pkgs, libs and services where possible)
 - [ ] add step result preview (one liner builder)

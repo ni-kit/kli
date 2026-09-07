@@ -125,6 +125,7 @@ func (s *historyService) SaveEdited(orig, updated domain.Invocation) error {
 			inv.Stdout = updated.Stdout
 			inv.Stderr = updated.Stderr
 			inv.Chain = updated.Chain
+			inv.Tags = updated.Tags
 		})
 	}
 	updated.ID = newID()
